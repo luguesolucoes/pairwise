@@ -18,7 +18,7 @@
   // Free hosts (Render and the like) spin down when idle and can take up to ~60 s to wake.
   // Wait out a full cold start before giving up, reporting elapsed seconds so it never looks stuck.
   const WAKE_MS = 150000;
-  const RETRY_MS = 60000;
+  const RETRY_MS = 150000;
 
   function errorFor(status, payload) {
     const code = payload && payload.error;
