@@ -5,10 +5,10 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta http-equiv="Content-Security-Policy" content="__CSP__">
 <meta name="referrer" content="no-referrer">
-<meta name="description" content="Pairwise encrypts large text in the browser with AES-256-GCM, uploads only the ciphertext to its own server, and shows a QR code. Another device opens the link, downloads the ciphertext and decrypts it. The key travels only in the link fragment and never reaches the server.">
+<meta name="description" content="Pairwise encrypts large text in the browser with AES-256-GCM, stores only the ciphertext on its own server, and shows a QR code. Another device opens the link, retrieves the ciphertext and decrypts it. The key travels only in the link fragment and never reaches the server.">
 <title>Pairwise Text Transfer</title>
 <style>
-/* Layout: one working column. Sender composes and uploads; the QR is the handoff. Utility type throughout. */
+/* Layout: one working column. One side encrypts and pairs; the QR is the handoff. Utility type throughout. */
 :root {
   --bg: #eef1f4; --surface: #ffffff; --sunk: #f6f8fa; --ink: #15202b; --muted: #556270;
   --line: #d3dae1; --accent: #1d5bbd; --accent-ink: #ffffff; --accent-soft: #e3ecfa;
@@ -106,7 +106,7 @@ textarea { font-family: var(--font-mono); font-size: 12.5px; line-height: var(--
   <header class="top">
     <div class="brand"><h1>Pairwise</h1></div>
     <div class="tabs" role="tablist" aria-label="Mode">
-      <button id="tab-send" role="tab" aria-selected="true" aria-controls="view-send">Send</button>
+      <button id="tab-send" role="tab" aria-selected="true" aria-controls="view-send">Pair</button>
       <button id="tab-recv" role="tab" aria-selected="false" aria-controls="view-recv">Receive</button>
     </div>
   </header>
@@ -123,7 +123,7 @@ textarea { font-family: var(--font-mono); font-size: 12.5px; line-height: var(--
         <input id="file-input" type="file" accept="text/*,.txt,.log,.json,.sql,.xml,.csv,.md" hidden>
         <button class="btn" id="btn-clear" type="button">Clear</button>
       </div>
-      <textarea id="input" spellcheck="false" autocomplete="off" autocapitalize="off" wrap="off" aria-label="Text to send" placeholder="Paste here with Ctrl+V or ⌘V. Pastes over 1,000,000 characters, or with Windows (CRLF) line endings, open in an exact read-only view so nothing is altered or truncated."></textarea>
+      <textarea id="input" spellcheck="false" autocomplete="off" autocapitalize="off" wrap="off" aria-label="Text to pair" placeholder="Paste here with Ctrl+V or ⌘V. Pastes over 1,000,000 characters, or with Windows (CRLF) line endings, open in an exact read-only view so nothing is altered or truncated."></textarea>
       <div id="bigview-wrap" hidden>
         <div class="vv" id="bigview"></div>
         <div class="row vv-note"><span>Shown read-only so every character and line ending is kept exactly. Lines longer than 2,000 characters are shortened on screen only; the transfer always includes everything. Use Clear to start over.</span></div>
@@ -132,7 +132,7 @@ textarea { font-family: var(--font-mono); font-size: 12.5px; line-height: var(--
         <span><b id="st-chars">0</b> characters</span>
         <span><b id="st-lines">0</b> lines</span>
         <span><b id="st-bytes">0 B</b> UTF-8</span>
-        <span><b id="st-wire">0 B</b> encrypted upload</span>
+        <span><b id="st-wire">0 B</b> encrypted</span>
       </div>
       <div id="surrogate-warning" class="notice warn" hidden></div>
       <div class="opts">
@@ -151,7 +151,7 @@ textarea { font-family: var(--font-mono); font-size: 12.5px; line-height: var(--
           <span>Delete from the server the moment it has been downloaded once. Leave on for a single recipient. Turn off if the same link may be opened more than once before it expires.</span></label>
       </div>
       <div class="row">
-        <button class="btn primary" id="btn-send" type="button" disabled>Encrypt and upload</button>
+        <button class="btn primary" id="btn-send" type="button" disabled>Encrypt</button>
         <button class="btn" id="btn-cancel-send" type="button" hidden>Cancel</button>
         <span class="small muted" id="send-status"></span>
       </div>
@@ -169,7 +169,7 @@ textarea { font-family: var(--font-mono); font-size: 12.5px; line-height: var(--
         <div class="qrbox"><canvas id="send-qr" width="320" height="320" aria-label="Retrieval QR code"></canvas></div>
         <div class="steps">
           <p class="small" style="margin:0"><b>Scan this code with the other device.</b> It opens the link, downloads the encrypted text and decrypts it on that device. You can close this page now; the encrypted text waits on the server until it is opened or the link expires.</p>
-          <p class="small muted" style="margin:0">The decryption key is in the part of the link after <span class="mono">#</span>, which browsers never send to the server. Anyone who sees this code can read the text, so keep it private.</p>
+          <p class="small muted" style="margin:0">The decryption key is in the part of the link after <span class="mono">#</span>, which browsers never include in a request to the server. Anyone who sees this code can read the text, so keep it private.</p>
           <div class="copyline"><input type="text" id="send-link" readonly aria-label="Retrieval link"><button class="btn" id="btn-copy-link" type="button">Copy link</button></div>
           <div class="stats" style="margin:0"><span>Integrity digest <b class="digest" id="send-digest" style="font-weight:600">–</b></span></div>
           <div id="send-note" class="notice info small" hidden></div>
@@ -182,7 +182,7 @@ textarea { font-family: var(--font-mono); font-size: 12.5px; line-height: var(--
   <main id="view-recv" role="tabpanel" aria-labelledby="tab-recv" hidden style="display:grid;gap:16px">
     <section class="panel" id="recv-connect">
       <h2>Receive text</h2>
-      <p class="small muted" style="margin:0">Open the link from the sending device's QR code with your camera, or paste it here. The text is downloaded and decrypted on this device.</p>
+      <p class="small muted" style="margin:0">Open the link shown on the other device (its QR code) with your camera, or paste it here. The text is downloaded and decrypted on this device.</p>
       <div class="copyline"><input type="text" id="offer-input" placeholder="Paste the link (https://…/#pw1b!…)" aria-label="Retrieval link" autocomplete="off"><button class="btn primary" id="btn-offer-go" type="button">Open</button></div>
       <span class="small" id="offer-error" role="alert"></span>
     </section>
@@ -222,12 +222,12 @@ textarea { font-family: var(--font-mono); font-size: 12.5px; line-height: var(--
   </section>
 
   <details class="panel netinfo">
-    <summary><b>What this page sends over the network</b></summary>
+    <summary><b>What this page does on the network</b></summary>
     <ul class="small">
-      <li>The page talks only to its own server, over ordinary HTTPS. Its Content Security Policy limits connections to that same origin, so it cannot send anything anywhere else.</li>
-      <li>On the sending side it uploads only the encrypted text (AES-256-GCM ciphertext) with a POST to <span class="mono">/api/blob</span>. The server stores that ciphertext under a random id until the link is opened or expires.</li>
+      <li>The page talks only to its own server, over ordinary HTTPS. Its Content Security Policy limits connections to that same origin, so it cannot reach anywhere else.</li>
+      <li>When you pair, it stores only the encrypted text (AES-256-GCM ciphertext) on the server under a random id, until the link is opened or expires.</li>
       <li>The decryption key is in the link fragment (after <span class="mono">#</span>). Browsers never put the fragment in an HTTP request, so the key never reaches the server.</li>
-      <li>On the receiving side it downloads the ciphertext with a GET from <span class="mono">/api/blob/&lt;id&gt;</span> and decrypts it in the browser. If "delete after first download" was set, the server removes it once it has been sent.</li>
+      <li>The receiving device retrieves the ciphertext by its id and decrypts it in the browser. If "delete after first download" was set, the server removes its copy once it has been served.</li>
       <li>The server only ever holds ciphertext and a random id. It cannot read the text.</li>
     </ul>
   </details>

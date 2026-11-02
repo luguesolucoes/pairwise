@@ -77,12 +77,12 @@
   {
     "test": "e2e sender closed before receiver opens (10 MB)",
     "pass": true,
-    "detail": "10,485,799 chars, 117,364 lines, 10.0 MiB | up+enc 0.5s, down+dec 0.3s | heap S 44 / R 33 MiB | link 128 chars, sender closed first"
+    "detail": "10,485,799 chars, 117,364 lines, 10.0 MiB | up+enc 0.9s, down+dec 0.3s | heap S 44 / R 33 MiB | link 128 chars, sender closed first"
   },
   {
     "test": "e2e small plain text",
     "pass": true,
-    "detail": "50,075 chars, 588 lines, 0.0 MiB | up+enc 0.2s, down+dec 0.3s | heap S 3 / R 3 MiB | link 128 chars"
+    "detail": "50,075 chars, 588 lines, 0.0 MiB | up+enc 0.2s, down+dec 0.2s | heap S 3 / R 3 MiB | link 128 chars"
   },
   {
     "test": "e2e Unicode with CRLF/NUL/emoji",
@@ -97,17 +97,17 @@
   {
     "test": "e2e 10 MB log",
     "pass": true,
-    "detail": "10,485,799 chars, 117,364 lines, 10.0 MiB | up+enc 0.7s, down+dec 0.7s | heap S 44 / R 33 MiB | link 128 chars"
+    "detail": "10,485,799 chars, 117,364 lines, 10.0 MiB | up+enc 0.7s, down+dec 0.8s | heap S 44 / R 33 MiB | link 128 chars"
   },
   {
     "test": "e2e 25 MB log",
     "pass": true,
-    "detail": "26,214,425 chars, 290,420 lines, 25.0 MiB | up+enc 1.5s, down+dec 0.7s | heap S 236 / R 78 MiB | link 128 chars"
+    "detail": "26,214,425 chars, 290,420 lines, 25.0 MiB | up+enc 1.4s, down+dec 1.4s | heap S 236 / R 78 MiB | link 128 chars"
   },
   {
     "test": "e2e 50 MB log",
     "pass": true,
-    "detail": "52,428,832 chars, 578,847 lines, 50.0 MiB | up+enc 1.8s, down+dec 1.2s | heap S 256 / R 154 MiB | link 128 chars"
+    "detail": "52,428,832 chars, 578,847 lines, 50.0 MiB | up+enc 2.5s, down+dec 1.6s | heap S 256 / R 154 MiB | link 128 chars"
   },
   {
     "test": "e2e 1,000,000 lines",
@@ -117,22 +117,22 @@
   {
     "test": "e2e 2,000,000 lines",
     "pass": true,
-    "detail": "34,666,754 chars, 2,000,000 lines, 33.1 MiB | up+enc 1.4s, down+dec 0.5s | heap S 176 / R 109 MiB | link 128 chars"
+    "detail": "34,666,754 chars, 2,000,000 lines, 33.1 MiB | up+enc 1.4s, down+dec 0.5s | heap S 177 / R 109 MiB | link 128 chars"
   },
   {
     "test": "e2e large JSON (~20 MB)",
     "pass": true,
-    "detail": "20,971,559 chars, 1,548,918 lines, 20.3 MiB | up+enc 0.9s, down+dec 0.4s | heap S 233 / R 88 MiB | link 128 chars"
+    "detail": "20,971,559 chars, 1,548,918 lines, 20.3 MiB | up+enc 1.0s, down+dec 0.4s | heap S 233 / R 88 MiB | link 128 chars"
   },
   {
     "test": "e2e large SQL (~15 MB)",
     "pass": true,
-    "detail": "15,728,659 chars, 151,915 lines, 15.0 MiB | up+enc 0.6s, down+dec 0.3s | heap S 79 / R 48 MiB | link 128 chars"
+    "detail": "15,728,659 chars, 151,915 lines, 15.0 MiB | up+enc 0.5s, down+dec 0.4s | heap S 79 / R 48 MiB | link 128 chars"
   },
   {
     "test": "e2e multilingual Unicode (~7 MB)",
     "pass": true,
-    "detail": "3,670,015 chars, 158,017 lines, 5.0 MiB | up+enc 0.3s, down+dec 0.2s | heap S 39 / R 42 MiB | link 128 chars"
+    "detail": "3,670,015 chars, 158,017 lines, 5.0 MiB | up+enc 0.3s, down+dec 0.3s | heap S 47 / R 42 MiB | link 128 chars"
   },
   {
     "test": "once=1 deletes after first download",
@@ -152,7 +152,7 @@
   {
     "test": "server request log never contains key material",
     "pass": true,
-    "detail": "115 API requests logged; sample paths: /, /api/blob, /api/blob/0ce51d960e882f273de5ab7cb6f7bc64, /api/blob/0ce51d960e882f273de5ab7cb6f7bc64/meta, /api/blob/27a0958e2f45c1d406c45153ab558381"
+    "detail": "130 API requests logged; sample paths: /, /api/blob, /api/blob/0a63817a328717fdfe273b262e459656, /api/blob/0a63817a328717fdfe273b262e459656/meta, /api/blob/12961dc901302ebe3cf71fdc96ade016"
   },
   {
     "test": "server rejects oversize upload (413) but accepts small",
