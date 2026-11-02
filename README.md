@@ -116,6 +116,10 @@ WantedBy=multi-user.target
 
 Because all traffic is HTTPS GET and POST on port 443 to one hostname, it passes through the kind of proxy that blocks WebSockets and odd ports.
 
+### Free app hosts (no VPS, no domain)
+
+The same server runs on a free Node host. The repo includes `render.yaml`: on [Render](https://render.com) choose New + → Blueprint, pick this repository, and it builds (`npm install && node build.mjs`) and runs `node server/server.mjs`, serving the page over HTTPS at `https://<name>.onrender.com`. The server reads the host's `PORT`. Koyeb, Fly.io and Railway work the same way (build `npm install && node build.mjs`, start `node server/server.mjs`). A mainstream app-hosting domain usually passes corporate proxies that block tunnel domains such as `*.trycloudflare.com` or `*.ngrok.io`. Note that free tiers use an ephemeral disk and sleep when idle, which suits short-lived transfers: do the transfer soon after uploading, and keep a short TTL. The host then holds the ciphertext (never the key) for the life of the link, the same as any server.
+
 ## Cryptography
 
 - Master key: 32 random bytes from `crypto.getRandomValues`, carried only in the link fragment. The receiver removes the fragment from the address bar and history entry with `history.replaceState` on load.

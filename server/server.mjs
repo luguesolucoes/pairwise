@@ -32,7 +32,8 @@ import { fileURLToPath } from 'node:url';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const num = (v, d) => (v && Number.isFinite(+v) ? +v : d);
 const CFG = {
-  port: num(process.env.PAIRWISE_PORT, 8787),
+  // PORT is set by most app hosts (Render, Koyeb, Heroku, Railway); PAIRWISE_PORT overrides it locally.
+  port: num(process.env.PAIRWISE_PORT || process.env.PORT, 8787),
   host: process.env.PAIRWISE_HOST || '0.0.0.0',
   store: path.resolve(process.env.PAIRWISE_STORE || path.join(HERE, '..', 'data')),
   staticFile: path.resolve(process.env.PAIRWISE_STATIC || path.join(HERE, '..', 'dist', 'index.html')),
