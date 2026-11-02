@@ -77,12 +77,12 @@
   {
     "test": "e2e sender closed before receiver opens (10 MB)",
     "pass": true,
-    "detail": "10,485,799 chars, 117,364 lines, 10.0 MiB | up+enc 1.2s, down+dec 0.3s | heap S 44 / R 33 MiB | link 128 chars, sender closed first"
+    "detail": "10,485,799 chars, 117,364 lines, 10.0 MiB | up+enc 0.4s, down+dec 0.3s | heap S 43 / R 33 MiB | link 128 chars, sender closed first"
   },
   {
     "test": "e2e small plain text",
     "pass": true,
-    "detail": "50,075 chars, 588 lines, 0.0 MiB | up+enc 0.3s, down+dec 0.2s | heap S 3 / R 3 MiB | link 128 chars"
+    "detail": "50,075 chars, 588 lines, 0.0 MiB | up+enc 0.2s, down+dec 0.1s | heap S 3 / R 3 MiB | link 128 chars"
   },
   {
     "test": "e2e Unicode with CRLF/NUL/emoji",
@@ -107,7 +107,7 @@
   {
     "test": "server request log never contains key material",
     "pass": true,
-    "detail": "58 API requests logged; sample paths: /, /api/blob, /api/blob/304a6b4bd075e69b8e6c45a77a6ccc4c, /api/blob/304a6b4bd075e69b8e6c45a77a6ccc4c/meta, /api/blob/3161f4b2edc763681ba8a6506dc992dd"
+    "detail": "58 API requests logged; sample paths: /, /api/blob, /api/blob/1e80cb40847766812ed9535706b27bc0, /api/blob/1e80cb40847766812ed9535706b27bc0/meta, /api/blob/543e5ce6da13853173bfb0912696acee"
   },
   {
     "test": "server rejects oversize upload (413) but accepts small",

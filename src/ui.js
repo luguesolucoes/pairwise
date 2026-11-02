@@ -285,7 +285,7 @@
       $('send-status').textContent = 'Pairing…';
       const onWait = (secs) => { $('send-status').textContent = 'Waking the server… ' + secs + 's (free hosts sleep when idle; first use can take up to a minute)'; };
       await NET.wake({ signal, onWait });
-      const res = await NET.uploadBlob(blob, { ttl, once, signal, onWait, onProgress: (loaded, total) => {
+      const res = await NET.uploadBlob(blob, { ttl, once, signal, onWait, onAttempt: (label) => log('Pair attempt → ' + label), onProgress: (loaded, total) => {
         $('upload-bar').style.width = (total ? (loaded / total * 100) : 0).toFixed(1) + '%';
         $('send-status').textContent = 'Pairing… ' + fmtBytes(loaded) + ' / ' + fmtBytes(total);
       } });
