@@ -193,32 +193,31 @@ The suite runs the built page, served by the real Node backend, in headless Chro
 
 ### Results (Chrome 153 headless, Linux, 2026-11-02)
 
-14 of 14 unit tests passed. End-to-end cases upload through the real UI to the Node server, then download and decrypt in a separate browser context; every row compares SHA-256 of the original and the reconstructed text.
+14 of 14 unit tests passed. End-to-end cases pair through the real UI to the Node server, then retrieve and decrypt in a separate browser context; every row compares SHA-256 of the original and the reconstructed text.
 
-| Case | Characters | Lines | UTF-8 | Upload+encrypt | Download+decrypt | JS heap S / R | Result |
+| Case | Characters | Lines | UTF-8 | Encrypt+pair | Retrieve+decrypt | JS heap S / R | Result |
 |---|---|---|---|---|---|---|---|
-| sender closed before receiver opens (10 MB) | 10,485,799 | 117,364 | 10.0 MiB | 0.5 s | 0.3 s | 44 / 33 MiB | pass |
-| small plain text | 50,075 | 588 | 0.0 MiB | 0.2 s | 0.3 s | 3 / 3 MiB | pass |
+| sender closed before receiver opens (10 MB) | 10,485,799 | 117,364 | 10.0 MiB | 0.9 s | 0.3 s | 44 / 33 MiB | pass |
+| small plain text | 50,075 | 588 | 0.0 MiB | 0.2 s | 0.2 s | 3 / 3 MiB | pass |
 | Unicode with CRLF/NUL/emoji | 200,005 | 9,171 | 0.3 MiB | 0.2 s | 0.2 s | 5 / 5 MiB | pass |
 | 1 MB log | 1,048,599 | 11,972 | 1.0 MiB | 0.2 s | 0.2 s | 13 / 11 MiB | pass |
-| 10 MB log | 10,485,799 | 117,364 | 10.0 MiB | 0.7 s | 0.7 s | 44 / 33 MiB | pass |
-| 25 MB log | 26,214,425 | 290,420 | 25.0 MiB | 1.5 s | 0.7 s | 236 / 78 MiB | pass |
-| 50 MB log | 52,428,832 | 578,847 | 50.0 MiB | 1.8 s | 1.2 s | 256 / 154 MiB | pass |
+| 10 MB log | 10,485,799 | 117,364 | 10.0 MiB | 0.7 s | 0.8 s | 44 / 33 MiB | pass |
+| 25 MB log | 26,214,425 | 290,420 | 25.0 MiB | 1.4 s | 1.4 s | 236 / 78 MiB | pass |
+| 50 MB log | 52,428,832 | 578,847 | 50.0 MiB | 2.5 s | 1.6 s | 256 / 154 MiB | pass |
 | 1,000,000 lines | 16,777,822 | 1,000,000 | 16.0 MiB | 0.8 s | 0.4 s | 187 / 54 MiB | pass |
-| 2,000,000 lines | 34,666,754 | 2,000,000 | 33.1 MiB | 1.4 s | 0.5 s | 176 / 109 MiB | pass |
-| large JSON (~20 MB) | 20,971,559 | 1,548,918 | 20.3 MiB | 0.9 s | 0.4 s | 233 / 88 MiB | pass |
-| large SQL (~15 MB) | 15,728,659 | 151,915 | 15.0 MiB | 0.6 s | 0.3 s | 79 / 48 MiB | pass |
-| multilingual Unicode (~7 MB) | 3,670,015 | 158,017 | 5.0 MiB | 0.3 s | 0.2 s | 39 / 42 MiB | pass |
+| 2,000,000 lines | 34,666,754 | 2,000,000 | 33.1 MiB | 1.4 s | 0.5 s | 177 / 109 MiB | pass |
+| large JSON (~20 MB) | 20,971,559 | 1,548,918 | 20.3 MiB | 1.0 s | 0.4 s | 233 / 88 MiB | pass |
+| large SQL (~15 MB) | 15,728,659 | 151,915 | 15.0 MiB | 0.5 s | 0.4 s | 79 / 48 MiB | pass |
+| multilingual Unicode (~7 MB) | 3,670,015 | 158,017 | 5.0 MiB | 0.3 s | 0.3 s | 47 / 42 MiB | pass |
 
 - page loads without console errors or CSP violations: pass ()
 - once=1 deletes after first download: pass (first matched=True, second as expected=True)
 - once=0 allows a second open: pass (first matched=True, second as expected=True)
 - delete now removes the blob from the server: pass (receiver saw: This transfer no longer exists. It may have expired or already been opened.)
-- server request log never contains key material: pass (115 API requests logged; sample paths: /, /api/blob, /api/blob/0ce51d960e882f273de5ab7cb6f7bc64, /api/blob/0ce51d960e882f273de5ab7cb6f7bc64/meta, /api)
+- server request log never contains key material: pass (130 API requests logged; sample paths: /, /api/blob, /api/blob/0a63817a328717fdfe273b262e459656, /api/blob/0a63817a328717fdfe273b262e459656/meta, /api)
 - server rejects oversize upload (413) but accepts small: pass (oversize status=413, small id=True)
 
-Times are loopback on one machine; real transfers are bounded by the network between each device and the server. The retrieval link (and the QR) was 128 characters in every case, independent of payload size, because only the id and key travel in it.
-
+Times are loopback on one machine; real transfers are bounded by the network between each device and the server. The retrieval link (and the QR) was 128 characters in every case, independent of payload size.
 
 ## Known limitations
 

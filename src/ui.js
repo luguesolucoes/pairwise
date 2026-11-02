@@ -1,4 +1,4 @@
-/* Pairwise UI. Sender encrypts and uploads; receiver downloads and decrypts.
+/* Pairwise UI. One side encrypts and pairs; the other retrieves and decrypts.
  * Wires the DOM to LT (crypto + blob format) and NET (server client). */
 (function () {
   'use strict';
@@ -228,7 +228,7 @@
     e.preventDefault();
     try { loadText(await f.text()); log('Opened dropped file ' + f.name); } catch (err) { toast('Could not read the file'); }
   });
-  $('btn-clear').addEventListener('click', () => { if (busy) { toast('Cancel the upload first'); return; } setSmall(''); input.focus(); });
+  $('btn-clear').addEventListener('click', () => { if (busy) { toast('Cancel the pairing first'); return; } setSmall(''); input.focus(); });
 
   function lockCompose(locked) {
     input.readOnly = locked;
@@ -282,12 +282,14 @@
       const blob = await buildBlob(sess, text, manifest, { expiresAt: plannedExpiry, signal, onProgress: (p) => { $('send-status').textContent = 'Encrypting… ' + Math.round(p * 100) + '%'; } });
       log('Encrypted ' + nf.format(manifest.count) + ' chunks (' + fmtBytes(blob.size) + ') in ' + Math.round(performance.now() - t0) + ' ms');
 
-      $('send-status').textContent = 'Uploading…';
-      const res = await NET.uploadBlob(blob, { ttl, once, signal, onProgress: (loaded, total) => {
+      $('send-status').textContent = 'Pairing…';
+      const onWait = (i, n) => { $('send-status').textContent = 'Waking the server… (' + i + '/' + n + ')'; };
+      await NET.wake({ signal, onWait });
+      const res = await NET.uploadBlob(blob, { ttl, once, signal, onWait, onProgress: (loaded, total) => {
         $('upload-bar').style.width = (total ? (loaded / total * 100) : 0).toFixed(1) + '%';
-        $('send-status').textContent = 'Uploading… ' + fmtBytes(loaded) + ' / ' + fmtBytes(total);
+        $('send-status').textContent = 'Pairing… ' + fmtBytes(loaded) + ' / ' + fmtBytes(total);
       } });
-      log('Uploaded. Server stored it as id ' + res.id + (once ? ', deletes after first download' : ''));
+      log('Paired. Server holds it as id ' + res.id + (once ? ', deletes after first download' : ''));
 
       active = { id: res.id, expiresAt: res.expiresAt || plannedExpiry };
       const link = retrieveLink(sess, res.id);
@@ -309,8 +311,8 @@
       log('QR ready (' + link.length + ' characters, QR ' + modules + '×' + modules + ' modules). You can close this page.');
     } catch (e) {
       $('upload-bar-wrap').hidden = true;
-      if (e && e.name === 'AbortError') { $('send-status').textContent = 'Cancelled.'; log('Upload cancelled'); }
-      else { $('send-status').textContent = ''; toast(errMsg(e)); log('Send failed: ' + errMsg(e)); }
+      if (e && e.name === 'AbortError') { $('send-status').textContent = 'Cancelled.'; log('Pairing cancelled'); }
+      else { $('send-status').textContent = ''; toast(errMsg(e)); log('Pairing failed: ' + errMsg(e)); }
     } finally {
       busy = false;
       sendAbort = null;
@@ -384,7 +386,7 @@
           if (!manifest) {
             manifest = LT.decodeManifest(o.plain);
             $('rp-total').textContent = fmtBytes(manifest.bytes);
-            if (manifest.unpaired) log('Sender reports ' + manifest.unpaired + ' unpaired surrogates replaced by U+FFFD');
+            if (manifest.unpaired) log('The text has ' + manifest.unpaired + ' unpaired surrogates, replaced by U+FFFD');
             log('Manifest: ' + nf.format(manifest.count) + ' chunks, ' + fmtBytes(manifest.bytes));
           }
           continue;
@@ -400,12 +402,13 @@
 
     try {
       sess = await LT.openSession(link.sid, link.key);
-      const meta = await NET.getMeta(link.id);
+      const onWait = () => setChip($('recv-state'), 'waking the server…', 'live');
+      const meta = await NET.getMeta(link.id, { signal, onWait });
       if (!meta) throw new Error('This transfer no longer exists. It may have expired or already been opened.');
-      log('Found it on the server (' + fmtBytes(meta.size) + (meta.once ? ', one-time' : '') + '). Downloading…');
+      log('Found it on the server (' + fmtBytes(meta.size) + (meta.once ? ', one-time' : '') + '). Receiving…');
       setChip($('recv-state'), 'downloading & decrypting', 'live');
       await NET.downloadStream(link.id, {
-        signal,
+        signal, onWait,
         onChunk: (bytes) => onChunk(bytes),
         onProgress: (loaded, total) => {
           $('recv-bar').style.width = (total ? (loaded / total * 100) : 0).toFixed(1) + '%';
@@ -418,17 +421,17 @@
       if (!manifest) throw new Error('The download contained no manifest');
       if (next !== manifest.count) throw new Error('Missing chunks: got ' + next + ' of ' + manifest.count);
       const digest = LT.hex(await LT.finalDigest(chain, recvBytes, next));
-      if (recvBytes !== manifest.bytes || digest !== manifest.digest) throw new Error('Integrity check failed: the content does not match the sender\'s digest');
+      if (recvBytes !== manifest.bytes || digest !== manifest.digest) throw new Error('Integrity check failed: the content does not match the original digest');
       parts.push(decoder.decode());
       const full = parts.join('');
       parts = [];
-      if (full.length !== manifest.chars) throw new Error('Character count does not match the sender');
+      if (full.length !== manifest.chars) throw new Error('Character count does not match the original');
       receivedText = full;
 
       setChip($('recv-state'), 'verified', 'ok');
       $('recv-progress').hidden = true;
       $('recv-result').hidden = false;
-      $('recv-verified').textContent = 'Verified. All ' + nf.format(manifest.count) + ' chunks decrypted and the SHA-256 integrity digest matches the sender: ' + groupHex(digest);
+      $('recv-verified').textContent = 'Verified. All ' + nf.format(manifest.count) + ' chunks decrypted and the SHA-256 integrity digest matches the original: ' + groupHex(digest);
       $('rr-chars').textContent = nf.format(receivedText.length);
       $('rr-lines').textContent = nf.format(manifest.lines);
       $('rr-bytes').textContent = fmtBytes(manifest.bytes);
