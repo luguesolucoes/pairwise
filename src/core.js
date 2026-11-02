@@ -181,7 +181,10 @@
     const auth = await subtle.deriveKey(
       { name: 'HKDF', hash: 'SHA-256', salt: sid, info: te.encode(PROTO + '/auth') },
       master, { name: 'HMAC', hash: 'SHA-256', length: 256 }, false, ['sign', 'verify']);
-    return { enc, auth };
+    const sig = await subtle.deriveKey(
+      { name: 'HKDF', hash: 'SHA-256', salt: sid, info: te.encode(PROTO + '/sig') },
+      master, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+    return { enc, auth, sig };
   }
 
   /** New session: 16-byte session id + 32-byte master key (only ever in the URL fragment). */
@@ -268,6 +271,36 @@
     return subtle.verify('HMAC', sess.keys.auth, tag, concat(te.encode(PROTO + '/resp'), concat(sess.sid, nonce)));
   }
 
+  // ---------- relay messages (automatic pairing) ----------
+  // Sealed with a separate HKDF key; random 96-bit IV; AAD binds the session id.
+  async function sealSignal(sess, text) {
+    const iv = rand(12);
+    const ct = new Uint8Array(await subtle.encrypt(
+      { name: 'AES-GCM', iv, additionalData: concat(sess.sid, te.encode(PROTO + '/sig')), tagLength: 128 },
+      sess.keys.sig, te.encode(text)));
+    return concat(iv, ct);
+  }
+
+  async function openSignal(sess, bytes) {
+    if (!(bytes instanceof Uint8Array) || bytes.length < 12 + GCM_TAG || bytes.length > 8192) throw new Error('Bad relay message');
+    const pt = await subtle.decrypt(
+      { name: 'AES-GCM', iv: bytes.subarray(0, 12), additionalData: concat(sess.sid, te.encode(PROTO + '/sig')), tagLength: 128 },
+      sess.keys.sig, bytes.subarray(12));
+    return new TextDecoder().decode(pt);
+  }
+
+  /** Relay topic: derived from the session id; unlinkable to it without the id. */
+  async function signalTopic(sess) {
+    const h = new Uint8Array(await subtle.digest('SHA-256', concat(te.encode(PROTO + '/topic'), sess.sid)));
+    return 'pairwise/' + hex(h.subarray(0, 16));
+  }
+
+  /** Short tag that ties an answer to the exact offer it answers. */
+  async function offerTag(compact) {
+    const h = new Uint8Array(await subtle.digest('SHA-256', te.encode(String(compact))));
+    return hex(h.subarray(0, 8));
+  }
+
   // ---------- compact signaling (SDP <-> short string for QR codes) ----------
   // Only what a data-channel-only session needs: ICE credentials, DTLS fingerprint,
   // DTLS role, max message size and UDP candidates. Everything else is a fixed template.
@@ -332,10 +365,11 @@
     return L.join('\r\n') + '\r\n';
   }
 
-  // Offer link fragment: #pw1!<sid>!<key>!<compact offer>   (key never leaves the fragment)
+  // Offer link fragment: #pw1!<sid>!<key>!<compact offer>[!a]  (key never leaves the fragment;
+  //                     a trailing "!a" means the sender listens on the pairing relays)
   // Answer code:          pwa1!<sid>!<compact answer>        (contains no key material)
-  function offerFragment(sess, compact) {
-    return PROTO + '!' + b64u(sess.sid) + '!' + b64u(sess.key) + '!' + compact;
+  function offerFragment(sess, compact, auto) {
+    return PROTO + '!' + b64u(sess.sid) + '!' + b64u(sess.key) + '!' + compact + (auto ? '!a' : '');
   }
 
   function parseOffer(text) {
@@ -344,11 +378,11 @@
     if (h !== -1) s = s.slice(h + 1);
     try { s = decodeURIComponent(s); } catch (e) { /* keep raw */ }
     const parts = s.split('!');
-    if (parts.length !== 4 || parts[0] !== PROTO) throw new Error('This is not a Pairwise sender code');
+    if ((parts.length !== 4 && !(parts.length === 5 && parts[4] === 'a')) || parts[0] !== PROTO) throw new Error('This is not a Pairwise sender code');
     const sid = unb64u(parts[1]), key = unb64u(parts[2]);
     if (sid.length !== 16 || key.length !== 32) throw new Error('Sender code is damaged');
     expandSdp(parts[3]); // validate
-    return { sid, key, compact: parts[3] };
+    return { sid, key, compact: parts[3], auto: parts.length === 5 };
   }
 
   function answerCode(sid, compact) { return 'pwa1!' + b64u(sid) + '!' + compact; }
@@ -371,6 +405,7 @@
     encodeChunkAt, prepare, finalDigest, chainStep, chunkBytesAt,
     newSession, openSession, sealFrame, openFrame, frameHeader,
     encodeManifest, decodeManifest, authTag, authVerify,
+    sealSignal, openSignal, signalTopic, offerTag,
     compactSdp, expandSdp, offerFragment, parseOffer, answerCode, parseAnswer
   };
 })(typeof window !== 'undefined' ? window : globalThis);

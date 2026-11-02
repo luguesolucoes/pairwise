@@ -41,6 +41,11 @@
   }
   function setChip(el, text, kind) { el.textContent = text; el.className = 'chip' + (kind ? ' ' + kind : ''); }
   function errMsg(e) { return e && e.message ? e.message : String(e); }
+  function relays() {
+    const m = TEST && /[?&]relay=([^&]+)/.exec(location.search);
+    if (m) return [{ url: decodeURIComponent(m[1]), label: 'test relay' }];
+    return PWR.DEFAULT_RELAYS;
+  }
   function iceServers() {
     const list = [];
     if ($('use-stun').checked) list.push({ urls: 'stun:stun.l.google.com:19302' });
@@ -239,6 +244,8 @@
   const bigView = new VirtualView($('bigview'));
   let bigText = null;        // set when content is too large for the textarea
   let sender = null;
+  let sendSignal = null;     // relay listener for automatic pairing
+  let currentOfferTag = '';
   let sendExpiry = 0, sendTimer = 0, sendStart = 0;
   let statsTimer = 0;
 
@@ -335,7 +342,7 @@
     $('btn-paste').disabled = locked;
     $('btn-clear').disabled = locked;
     $('file-input').disabled = locked;
-    $('ttl').disabled = locked; $('use-stun').disabled = locked;
+    $('ttl').disabled = locked; $('use-stun').disabled = locked; $('use-relay').disabled = locked;
     ['turn-url', 'turn-user', 'turn-pass'].forEach((id) => { $(id).disabled = locked; });
   }
 
@@ -360,6 +367,15 @@
       const ttlMin = parseInt($('ttl').value, 10) || 15;
       sendExpiry = Date.now() + ttlMin * 60000;
       sender = new PW.Sender({ text, manifest, sess, iceServers: ice, expiresAt: sendExpiry, onEvent: onSenderEvent });
+      if ($('use-relay').checked) {
+        sendSignal = new PWR.Signal(sess, relays(), onSignalEvent);
+        sendSignal.listen(onRelayAnswer);
+        await sendSignal.start();
+        $('manual-pair').open = false;
+      } else {
+        $('manual-pair').open = true;
+      }
+      setAutoStatus();
       $('prepare-status').textContent = 'Gathering network candidates…';
       if (!ice.length) log('No STUN or TURN configured: only local-network connections will work');
       await showOffer();
@@ -379,8 +395,36 @@
     }
   });
 
+  function setAutoStatus(text) {
+    const el = $('auto-status');
+    if (text) { el.textContent = text; return; }
+    if (!sendSignal) { el.textContent = 'Automatic pairing is off. Open Pair manually instead below.'; return; }
+    el.textContent = 'Waiting for the other device to open the link…';
+  }
+
+  function onSignalEvent(type, data) {
+    if (type === 'log') log(data);
+    else if (type === 'status' && sendSignal && data.open === 0 && data.failed === data.total) {
+      setAutoStatus('No pairing relay is reachable from this network. Use Pair manually instead.');
+      $('manual-pair').open = true;
+    }
+  }
+
+  async function onRelayAnswer(text) {
+    if (!sender || !sender.peer) return;
+    let msg;
+    try { msg = JSON.parse(text); } catch (e) { return; }
+    if (!msg || typeof msg.a !== 'string' || msg.f !== currentOfferTag) return; // reply to an older code
+    if (sender.peer.pc.signalingState !== 'have-local-offer') return;          // already paired
+    log('Reply received through the pairing relay');
+    setAutoStatus('The other device answered. Connecting…');
+    await applyAnswer(msg.a);
+  }
+
   async function showOffer() {
-    const frag = await sender.createOffer();
+    const frag0 = await sender.createOffer();
+    const frag = frag0 + (sendSignal ? '!a' : '');
+    currentOfferTag = await LT.offerTag(frag0.split('!')[3]);
     const base = location.href.split('#')[0].split('?')[0];
     const link = base + '#' + frag;
     const modules = drawQR($('send-qr'), link);
@@ -442,6 +486,7 @@
       r.className = 'notice ok'; r.hidden = false;
       r.textContent = 'Delivered and verified. The recipient rebuilt the text and its SHA-256 integrity digest matches: ' + groupHex(data.digest);
       log('Recipient confirmed the integrity digest');
+      if (sendSignal) { sendSignal.close(); sendSignal = null; }
     } else if (type === 'disconnected') {
       if (!sender || sender.verified) return;
       setChip($('send-state'), 'disconnected', 'warn');
@@ -464,6 +509,7 @@
     if (!sender) return;
     try {
       await showOffer();
+      setAutoStatus();
       $('send-pair').hidden = false;
       $('send-resume').hidden = true;
       $('send-result').hidden = true;
@@ -473,6 +519,7 @@
 
   function endSendSession(notify, message) {
     if (prepareAbort) prepareAbort.abort();
+    if (sendSignal) { sendSignal.close(); sendSignal = null; }
     if (sender) { sender.destroy(notify); sender = null; log('Send session ended; key material discarded'); }
     clearInterval(sendTimer);
     const c = $('send-qr'); c.getContext('2d').clearRect(0, 0, c.width, c.height);
@@ -496,6 +543,8 @@
   // ===================================================== RECEIVE side
   const recvView = new VirtualView($('recvview'));
   let receiver = null, receivedText = null, recvExpiry = 0, recvTimer = 0, recvStart = 0;
+  let recvSignal = null;
+  function stopRecvSignal() { if (recvSignal) { recvSignal.close(); recvSignal = null; } }
 
   function ensureReceiver() {
     if (!receiver) {
@@ -512,18 +561,39 @@
     try { offer = LT.parseOffer(text); } catch (e) { $('offer-error').textContent = errMsg(e); $('offer-error').style.color = 'var(--bad)'; return; }
     showTab('recv');
     $('answer-out').value = '';
+    $('recv-connect').hidden = true;
+    $('recv-answer').hidden = false;
+    $('recv-issue').hidden = true;
+    setChip($('recv-state'), 'connecting', 'live');
+    $('recv-manual').open = !offer.auto;
+    $('recv-auto-status').textContent = offer.auto
+      ? 'Connecting to the sender. The text is decrypted on this device as soon as it arrives.'
+      : 'The sender turned off automatic pairing. Open Pair manually and show the reply code to the sender.';
     try {
       const r = ensureReceiver();
-      log(r.sess ? 'New code for the same session: reconnecting to resume' : 'Sender code accepted; building a connection answer');
+      log(r.sess ? 'New code for the same session: reconnecting to resume' : 'Sender code accepted; preparing the connection');
       const answer = await r.acceptOffer(offer);
       drawQR($('recv-qr'), answer);
       $('answer-out').value = answer;
-      $('recv-connect').hidden = true;
-      $('recv-answer').hidden = false;
-      $('recv-issue').hidden = true;
-      setChip($('recv-state'), 'waiting for sender', 'live');
-      log('Answer ready (' + answer.length + ' characters). Show it to the sending device.');
+      if (offer.auto) {
+        stopRecvSignal();
+        recvSignal = new PWR.Signal(r.sess, relays(), (type, data) => {
+          if (type === 'log') log(data);
+          else if (type === 'status' && data.open === 0 && data.failed === data.total) {
+            $('recv-auto-status').textContent = 'No pairing relay is reachable from this network. Open Pair manually and show the reply code to the sender.';
+            $('recv-manual').open = true;
+          }
+        });
+        await recvSignal.start();
+        const tag = await LT.offerTag(offer.compact);
+        await recvSignal.publishRepeatedly(JSON.stringify({ a: answer, f: tag }), 180000);
+        log('Sent the encrypted connection reply through the pairing relays');
+      } else {
+        log('Reply ready (' + answer.length + ' characters). Show it to the sending device.');
+      }
     } catch (e) {
+      $('recv-answer').hidden = true;
+      $('recv-connect').hidden = false;
       $('offer-error').textContent = errMsg(e);
       $('offer-error').style.color = 'var(--bad)';
       log('Pairing failed: ' + errMsg(e));
@@ -538,7 +608,7 @@
       if (text) startReceive(text);
     } catch (e) { toast(errMsg(e)); }
   });
-  $('btn-copy-answer').addEventListener('click', () => copyText($('answer-out').value, 'Answer code'));
+  $('btn-copy-answer').addEventListener('click', () => copyText($('answer-out').value, 'Reply code'));
   $('btn-recv-cancel').addEventListener('click', () => resetReceive(true));
 
   function startRecvTimer() {
@@ -559,6 +629,7 @@
     if (type === 'log') log(data);
     else if (type === 'state') {
       if (data === 'connected' || data === 'receiving') {
+        stopRecvSignal();
         $('recv-answer').hidden = true;
         $('recv-progress').hidden = false;
         $('recv-issue').hidden = true;
@@ -587,6 +658,8 @@
       $('rr-lines').textContent = nf.format(data.manifest.lines);
       $('rr-bytes').textContent = fmtBytes(data.manifest.bytes);
       recvView.setText(receivedText);
+      if (!$('save-name').value) $('save-name').value = defaultSaveName();
+      stopRecvSignal();
       log('Transfer complete and verified');
       // Close the connection and drop the key; keep only the decrypted text.
       setTimeout(() => { if (receiver) { receiver.destroy(true, true); receiver = null; log('Connection closed; key material discarded'); } }, 400);
@@ -611,6 +684,7 @@
   }
 
   function resetReceive(notify, message) {
+    stopRecvSignal();
     if (receiver) { receiver.destroy(notify, false); receiver = null; }
     clearInterval(recvTimer);
     recvExpiry = 0; recvStart = 0;
@@ -625,19 +699,44 @@
   }
 
   $('btn-copy-all').addEventListener('click', () => { if (receivedText !== null) copyText(receivedText, nf.format(receivedText.length) + ' characters'); });
-  $('btn-download').addEventListener('click', () => {
+  function defaultSaveName() { return 'pairwise-' + new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19).replace('T', '_'); }
+  function cleanFileName(name) {
+    const n = String(name || '').replace(/[\u0000-\u001f\u007f<>:"/\\|?*]/g, '_').replace(/^[.\s]+|[.\s]+$/g, '').slice(0, 200);
+    return n || defaultSaveName();
+  }
+  $('btn-download').addEventListener('click', async () => {
     if (receivedText === null) return;
-    const blob = new Blob([receivedText], { type: 'text/plain;charset=utf-8' });
+    const name = cleanFileName($('save-name').value);
+    $('save-name').value = name;
+    // Raw bytes with a generic type, so the browser keeps the name exactly as typed
+    // (no .txt appended when there is no extension).
+    const blob = new Blob([receivedText], { type: 'application/octet-stream' });
+    if (typeof window.showSaveFilePicker === 'function') {
+      try {
+        const handle = await window.showSaveFilePicker({ suggestedName: name });
+        const w = await handle.createWritable();
+        await w.write(blob);
+        await w.close();
+        toast('Saved ' + handle.name);
+        log('Saved ' + fmtBytes(blob.size) + ' to ' + handle.name);
+        return;
+      } catch (e) {
+        if (e && e.name === 'AbortError') return; // user cancelled the dialog
+        // Otherwise fall back to a regular download.
+      }
+    }
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = 'pairwise-' + new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19) + '.txt';
+    a.download = name;
     document.body.appendChild(a); a.click(); a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 30000);
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+    log('Downloaded ' + fmtBytes(blob.size) + ' as ' + name);
   });
   $('btn-recv-clear').addEventListener('click', () => {
     receivedText = null;
     recvView.clear();
+    $('save-name').value = '';
     $('recv-result').hidden = true;
     resetReceive(true);
     $('offer-error').textContent = '';

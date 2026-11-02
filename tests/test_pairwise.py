@@ -9,6 +9,8 @@ Runs the built dist/index.html in real Chromium (Google Chrome) via Playwright:
 Usage:  python3 tests/test_pairwise.py [--quick] [--browser chromium|webkit]
 """
 import http.server
+import subprocess
+import urllib.parse
 import json
 import os
 import socketserver
@@ -31,6 +33,21 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
     def log_message(self, fmt, *args):
         REQUEST_LOG.append(self.requestline)
+
+
+BROKER_LOG = []
+
+
+def start_broker():
+    proc = subprocess.Popen(['node', os.path.join(os.path.dirname(os.path.abspath(__file__)), 'broker.mjs')],
+                            stdout=subprocess.PIPE, text=True)
+    port = None
+    while port is None:
+        line = proc.stdout.readline()
+        if line.startswith('PORT'):
+            port = int(line.split()[1])
+    threading.Thread(target=lambda: [BROKER_LOG.append(l.strip()) for l in proc.stdout], daemon=True).start()
+    return proc, 'ws://127.0.0.1:%d' % port
 
 
 def serve():
@@ -206,6 +223,24 @@ async () => {
     try { await fetch(location.href, { method: 'POST', body: 'x' }); return 'fetch was allowed'; } catch (e) { return true; }
   });
 
+  await t('relay messages: encrypted, session-bound, tamper-evident', async () => {
+    const a = await LT.newSession(), b = await LT.newSession();
+    const sealed = await LT.sealSignal(a, '{"a":"pwa1!x"}');
+    if ((await LT.openSignal(a, sealed)) !== '{"a":"pwa1!x"}') return 'round trip failed';
+    if (new TextDecoder().decode(sealed).includes('pwa1')) return 'plaintext visible';
+    if (!(await mustFail(() => LT.openSignal(b, sealed)))) return 'other session opened it';
+    const t2 = sealed.slice(); t2[t2.length - 1] ^= 1;
+    if (!(await mustFail(() => LT.openSignal(a, t2)))) return 'tamper accepted';
+    const topic = await LT.signalTopic(a);
+    return (/^pairwise\/[0-9a-f]{32}$/.test(topic) && !topic.includes(LT.hex(a.sid).slice(0, 8))) || 'bad topic ' + topic;
+  });
+
+  await t('offer link carries the automatic-pairing flag', async () => {
+    const s = await LT.newSession();
+    const compact = 'abcd~' + 'p'.repeat(24) + '~' + LT.b64u(LT.rand(32)) + '~x~262144~h,192.0.2.1,5000';
+    return LT.parseOffer('#' + LT.offerFragment(s, compact, true)).auto === true && LT.parseOffer('#' + LT.offerFragment(s, compact, false)).auto === false || 'flag lost';
+  });
+
   await t('offer/answer codes: parse, size, and reject garbage', async () => {
     const s = await LT.newSession();
     const compact = 'abcd~' + 'p'.repeat(24) + '~' + LT.b64u(LT.rand(32)) + '~x~262144~h,1a2b3c4d-1111-2222-3333-444455556666.local,54321~s,203.0.113.7,61000';
@@ -275,7 +310,8 @@ async () => {
 """
 
 
-def pair(sender, receiver, timeout=120000):
+def pair(sender, receiver, timeout=120000, manual=False):
+    """Receiver opens the sender's link; the reply comes back through the relay (or manually)."""
     sender.wait_for_function("document.getElementById('send-link').value.includes('#pw1!')", timeout=timeout)
     link = sender.input_value('#send-link')
     receiver.evaluate("document.getElementById('answer-out').dataset.prev = document.getElementById('answer-out').value")
@@ -283,8 +319,9 @@ def pair(sender, receiver, timeout=120000):
     receiver.click('#btn-offer-go')
     receiver.wait_for_function("(() => { const a = document.getElementById('answer-out'); return a.value.startsWith('pwa1!') && a.value !== a.dataset.prev; })()", timeout=30000)
     answer = receiver.input_value('#answer-out')
-    sender.fill('#answer-input', answer)
-    sender.click('#btn-connect')
+    if manual:
+        sender.fill('#answer-input', answer)
+        sender.click('#btn-connect')
     return link, answer
 
 
@@ -359,6 +396,66 @@ def resume_case(browser, url):
         ctx_s.close(); ctx_r.close()
 
 
+def manual_case(browser, url):
+    """Automatic pairing off: the reply QR/code is the only path, and nothing reaches the relay."""
+    ctx_s, ctx_r = browser.new_context(bypass_csp=True), browser.new_context(bypass_csp=True)
+    s, r = ctx_s.new_page(), ctx_r.new_page()
+    try:
+        s.goto(url); r.goto(url); r.click('#tab-recv')
+        before = len([l for l in BROKER_LOG if l.startswith('PUBLISH')])
+        info = s.evaluate(E2E_SETUP_JS, ['sql', 2 * 1048576])
+        s.uncheck('#use-relay')
+        s.click('#btn-prepare')
+        link, answer = pair(s, r, manual=True)
+        r.wait_for_selector('#recv-result:not([hidden])', timeout=120000)
+        got = r.evaluate(HASH_RECEIVED_JS)
+        published = len([l for l in BROKER_LOG if l.startswith('PUBLISH')]) - before
+        record('manual pairing with relays off', got['sha'] == info['sha'] and not link.endswith('!a') and published == 0,
+               'link has auto flag=%s, relay messages=%d' % (link.endswith('!a'), published))
+    except Exception as e:
+        record('manual pairing with relays off', False, repr(e)[:400])
+    finally:
+        ctx_s.close(); ctx_r.close()
+
+
+def relay_privacy_case():
+    """Relay messages are small opaque blobs: no key, no SDP, no text."""
+    pubs = [l for l in BROKER_LOG if l.startswith('PUBLISH')]
+    sizes = sorted(set(int(l.split()[2]) for l in pubs))
+    topics_ok = all(l.split()[1].startswith('pairwise/') and len(l.split()[1]) == len('pairwise/') + 32 for l in pubs)
+    record('relay sees only small encrypted messages on derived topics', bool(pubs) and topics_ok and max(sizes) < 1024,
+           '%d relay messages, sizes %s bytes' % (len(pubs), sizes[:6]))
+
+
+def save_case(browser, url):
+    """Received text can be saved under any name, with no extension forced."""
+    ctx_s, ctx_r = browser.new_context(bypass_csp=True), browser.new_context(bypass_csp=True, accept_downloads=True)
+    s, r = ctx_s.new_page(), ctx_r.new_page()
+    try:
+        s.goto(url); r.goto(url); r.click('#tab-recv')
+        r.evaluate('delete window.showSaveFilePicker')  # exercise the download path headlessly
+        info = s.evaluate(E2E_SETUP_JS, ['unicode', 50000])
+        s.click('#btn-prepare')
+        pair(s, r)
+        r.wait_for_selector('#recv-result:not([hidden])', timeout=60000)
+        results = []
+        for name in ('received-dump', 'notes.md'):
+            r.fill('#save-name', name)
+            with r.expect_download() as dl:
+                r.click('#btn-download')
+            d = dl.value
+            path = d.path()
+            import hashlib
+            data = open(path, 'rb').read()
+            results.append((d.suggested_filename, hashlib.sha256(data).hexdigest() == info['sha']))
+        ok = results == [('received-dump', True), ('notes.md', True)]
+        record('save as file keeps the chosen name and exact bytes', ok, str(results))
+    except Exception as e:
+        record('save as file keeps the chosen name and exact bytes', False, repr(e)[:400])
+    finally:
+        ctx_s.close(); ctx_r.close()
+
+
 def end_session_case(browser, url):
     ctx_s, ctx_r = browser.new_context(bypass_csp=True), browser.new_context(bypass_csp=True)
     s, r = ctx_s.new_page(), ctx_r.new_page()
@@ -402,7 +499,6 @@ def fragment_case(browser, url):
         r.wait_for_function("document.getElementById('answer-out').value.startsWith('pwa1!')", timeout=30000)
         leaked = any(key in line for line in REQUEST_LOG[before:])
         url_clean = '#' not in r.url
-        s.fill('#answer-input', r.input_value('#answer-out')); s.click('#btn-connect')
         r.wait_for_selector('#recv-result:not([hidden])', timeout=60000)
         got = r.evaluate(HASH_RECEIVED_JS)
         record('QR link flow: key never reaches the server, removed from address bar',
@@ -416,6 +512,8 @@ def fragment_case(browser, url):
 
 def main():
     srv, url = serve()
+    broker, relay_url = start_broker()
+    url = url + '&relay=' + urllib.parse.quote(relay_url, safe='')
     with sync_playwright() as p:
         if BROWSER == 'webkit':
             browser = p.webkit.launch()
@@ -454,10 +552,14 @@ def main():
         for name, kind, size in cases:
             e2e_case(browser, url, name, kind, size)
         fragment_case(browser, url)
+        manual_case(browser, url)
+        save_case(browser, url)
+        relay_privacy_case()
         resume_case(browser, url)
         end_session_case(browser, url)
         browser.close()
     srv.shutdown()
+    broker.terminate()
     failed = [r for r in RESULTS if not r[1]]
     print('\n%d passed, %d failed' % (len(RESULTS) - len(failed), len(failed)))
     with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'results-%s.json' % BROWSER), 'w') as f:

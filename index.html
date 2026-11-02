@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-k7fEPBj7Leuvy4Kg9O39Bs/AoEBy4Bjpi/WWqxxlCTs=' 'sha256-afE9pCjZw6FKsQEzCeJsPOSL9tWlgVFVhQzTtXVDGro=' 'sha256-D8DUhmtmuA/re07gvkvaeIno9Gi1SVBYaFg5cIn9O9Q=' 'sha256-HQOUwk1BSjHZoEpfQWJWKiB9TYPz9Znq9a9qGBJ+Vdw=' 'sha256-PXcNiqPFosPsnHxHAk8AYQzp8KIYAZjEVKTDyIhpClk='; style-src 'unsafe-inline'; img-src data: blob:; media-src blob: mediastream:; connect-src 'none'; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-k7fEPBj7Leuvy4Kg9O39Bs/AoEBy4Bjpi/WWqxxlCTs=' 'sha256-afE9pCjZw6FKsQEzCeJsPOSL9tWlgVFVhQzTtXVDGro=' 'sha256-Y4BoOqplbTJxiYii5c2IuxjQ+DQsjsiLIrcIe8nm3z0=' 'sha256-HQOUwk1BSjHZoEpfQWJWKiB9TYPz9Znq9a9qGBJ+Vdw=' 'sha256-Vs3wuOA4pOMpO2Mw3dcIHb1GP+ZpE1qpTakullpnTWY=' 'sha256-JE6mlKkHC0/OgO5ILL5O/BvCymep2n1kQnquhb3+ydg='; style-src 'unsafe-inline'; img-src data: blob:; media-src blob: mediastream:; connect-src wss://broker.emqx.io:8084 wss://broker.hivemq.com:8884 wss://test.mosquitto.org:8081; base-uri 'none'; form-action 'none'">
 <meta name="referrer" content="no-referrer">
 <meta name="description" content="Pairwise sends large text from one browser to another over a direct WebRTC connection. Text is encrypted with AES-256-GCM in the sending browser; the key travels only inside the QR code. Optional STUN or TURN servers are used only for connection setup or relaying when configured.">
 <title>Pairwise Text Transfer</title>
@@ -91,6 +91,7 @@ details > summary { cursor: pointer; color: var(--muted); }
 .step .num { display: inline-block; min-width: 1.6em; color: var(--accent); font-variant-numeric: tabular-nums; }
 .copyline { display: flex; gap: 8px; min-width: 0; }
 .copyline input { flex: 1; font-family: var(--font-mono); font-size: 12px; }
+.savebox { flex: 1 1 260px; max-width: 460px; }
 .chip { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; border-radius: 999px; padding: 2px 10px; border: 1px solid var(--line); background: var(--sunk); color: var(--muted); font-variant-numeric: tabular-nums; }
 .chip.ok { color: var(--ok); border-color: currentColor; }
 .chip.warn { color: var(--warn); border-color: currentColor; }
@@ -159,6 +160,8 @@ dialog video { width: 100%; border-radius: var(--radius); background: #000; disp
         </div>
         <label class="small"><input type="checkbox" id="use-stun" checked>
           <span>Use the public STUN server <span class="mono">stun.l.google.com:19302</span> so devices on different networks can find each other. It learns your public IP address and nothing else. Turn off when both devices share a local network.</span></label>
+        <label class="small"><input type="checkbox" id="use-relay" checked>
+          <span>Pair automatically. The receiving device sends its encrypted connection reply back through public message brokers (<span class="mono">broker.emqx.io, broker.hivemq.com, test.mosquitto.org</span>), so it only has to open the link. The brokers see an encrypted message of a few hundred bytes, never the key or the text. Turn off to bring the reply back by scanning a second QR code instead.</span></label>
         <details>
           <summary class="small">TURN relay (optional, for networks that block direct connections)</summary>
           <div class="turn">
@@ -191,11 +194,17 @@ dialog video { width: 100%; border-radius: var(--radius); background: #000; disp
             <div class="copyline"><input type="text" id="send-link" readonly aria-label="Recipient link"><button class="btn" id="btn-copy-link" type="button">Copy link</button></div>
           </div>
           <div class="step">
-            <h3><span class="num">2</span>Bring back the answer from the other device</h3>
-            <p class="small muted" style="margin:0">The receiving device shows an answer QR. Scan it here, or paste its answer code. The answer contains connection details only.</p>
-            <div class="row"><button class="btn" id="btn-scan-answer" type="button">Scan answer with camera</button></div>
-            <textarea id="answer-input" rows="3" spellcheck="false" placeholder="pwa1!…" aria-label="Answer code"></textarea>
-            <div class="row"><button class="btn primary" id="btn-connect" type="button">Connect</button><span class="small" id="answer-error" role="alert"></span></div>
+            <h3><span class="num">2</span>The transfer starts by itself</h3>
+            <p class="small muted" style="margin:0" id="auto-status">Waiting for the other device to open the link…</p>
+            <details id="manual-pair">
+              <summary class="small">Pair manually instead</summary>
+              <div class="step" style="margin-top:8px">
+                <p class="small muted" style="margin:0">If the transfer does not start, open <b>Pair manually</b> on the receiving device. It shows a reply QR: scan it here, or paste its reply code. The reply holds connection details only.</p>
+                <div class="row"><button class="btn" id="btn-scan-answer" type="button">Scan reply with camera</button></div>
+                <textarea id="answer-input" rows="3" spellcheck="false" placeholder="pwa1!…" aria-label="Reply code"></textarea>
+                <div class="row"><button class="btn primary" id="btn-connect" type="button">Connect</button><span class="small" id="answer-error" role="alert"></span></div>
+              </div>
+            </details>
           </div>
         </div>
       </div>
@@ -227,15 +236,19 @@ dialog video { width: 100%; border-radius: var(--radius); background: #000; disp
     </section>
 
     <section class="panel" id="recv-answer" hidden>
-      <div class="row"><h2>Show this answer to the sender</h2><span class="spacer"></span><span class="chip live" id="recv-state">waiting for sender</span></div>
-      <div class="pair">
-        <div class="qrbox"><canvas id="recv-qr" width="320" height="320" aria-label="Answer QR code"></canvas></div>
-        <div class="steps">
-          <p class="small muted" style="margin:0">On the sending device, choose <b>Scan answer with camera</b> and point it at this code. Or copy the answer code and paste it there. It holds connection details only, not the key.</p>
-          <div class="copyline"><input type="text" id="answer-out" readonly aria-label="Answer code"><button class="btn" id="btn-copy-answer" type="button">Copy answer</button></div>
-          <button class="btn danger" id="btn-recv-cancel" type="button" style="justify-self:start">Cancel</button>
+      <div class="row"><h2>Connecting to the sender</h2><span class="spacer"></span><span class="chip live" id="recv-state">connecting</span></div>
+      <p class="small muted" style="margin:0" id="recv-auto-status">The text is decrypted on this device as soon as it arrives.</p>
+      <details id="recv-manual">
+        <summary class="small">Pair manually</summary>
+        <div class="pair" style="margin-top:10px">
+          <div class="qrbox"><canvas id="recv-qr" width="320" height="320" aria-label="Reply QR code"></canvas></div>
+          <div class="steps">
+            <p class="small muted" style="margin:0">On the sending device, open <b>Pair manually instead</b> and scan this code, or copy this reply code there. It holds connection details only, not the key.</p>
+            <div class="copyline"><input type="text" id="answer-out" readonly aria-label="Reply code"><button class="btn" id="btn-copy-answer" type="button">Copy reply</button></div>
+          </div>
         </div>
-      </div>
+      </details>
+      <button class="btn danger" id="btn-recv-cancel" type="button" style="justify-self:start">Cancel</button>
     </section>
 
     <section class="panel" id="recv-progress" hidden>
@@ -249,14 +262,21 @@ dialog video { width: 100%; border-radius: var(--radius); background: #000; disp
       <div class="row">
         <h2>Received text</h2>
         <span class="spacer"></span>
-        <button class="btn primary" id="btn-copy-all" type="button">Copy all</button>
-        <button class="btn" id="btn-download" type="button">Download .txt</button>
         <button class="btn danger" id="btn-recv-clear" type="button">Clear</button>
       </div>
+      <div class="row">
+        <button class="btn primary" id="btn-copy-all" type="button">Copy all</button>
+        <span class="muted small">or</span>
+        <div class="copyline savebox">
+          <input type="text" id="save-name" aria-label="File name" spellcheck="false" autocomplete="off">
+          <button class="btn" id="btn-download" type="button">Save as file</button>
+        </div>
+      </div>
+      <p class="small muted" style="margin:0">Name the file however you like, with any extension or none (for example <span class="mono">notes.md</span>, <span class="mono">dump.sql</span>).</p>
       <div class="notice ok" id="recv-verified"></div>
       <div class="stats"><span><b id="rr-chars">0</b> characters</span><span><b id="rr-lines">0</b> lines</span><span><b id="rr-bytes">0 B</b> UTF-8</span></div>
       <div class="vv" id="recvview"></div>
-      <div class="vv-note">Lines longer than 2,000 characters are shortened on screen only. Copy and download include the complete text.</div>
+      <div class="vv-note">Lines longer than 2,000 characters are shortened on screen only. Copy and save include the complete text.</div>
     </section>
   </main>
 
@@ -268,8 +288,8 @@ dialog video { width: 100%; border-radius: var(--radius); background: #000; disp
   <details class="panel netinfo">
     <summary><b>What this page sends over the network</b></summary>
     <ul class="small">
-      <li>The page itself makes no HTTP requests after it loads. Its Content Security Policy sets <span class="mono">connect-src 'none'</span>, so it cannot upload anything to a web server.</li>
-      <li>Pairing data (connection offer and answer) moves only through the QR codes or links you copy yourself. There is no signaling server.</li>
+      <li>The page makes no HTTP requests after it loads. Its Content Security Policy allows network connections only to the pairing brokers below, over WebSocket, so it cannot upload anything to a web server.</li>
+      <li>The connection offer travels inside the QR code. With automatic pairing on, the receiving device sends its connection reply back through public MQTT message brokers (<span class="mono">broker.emqx.io, broker.hivemq.com, test.mosquitto.org</span>) over secure WebSockets. The reply is encrypted with a key derived from the QR code, so the brokers see only an opaque message of a few hundred bytes on a random-looking topic, plus both devices' IP addresses. With automatic pairing off, nothing goes to the brokers and the reply moves by a second QR code.</li>
       <li>If STUN is on, each browser sends a small request to <span class="mono">stun.l.google.com:19302</span> to learn its public IP address.</li>
       <li>The text travels directly between the two browsers over a WebRTC data channel. WebRTC encrypts the channel with DTLS, and each 48 KiB chunk is additionally sealed with AES-256-GCM using a key that exists only in the QR code.</li>
       <li>If you configure TURN, the encrypted stream may pass through that relay. It cannot read it.</li>
@@ -472,7 +492,10 @@ dialog video { width: 100%; border-radius: var(--radius); background: #000; disp
     const auth = await subtle.deriveKey(
       { name: 'HKDF', hash: 'SHA-256', salt: sid, info: te.encode(PROTO + '/auth') },
       master, { name: 'HMAC', hash: 'SHA-256', length: 256 }, false, ['sign', 'verify']);
-    return { enc, auth };
+    const sig = await subtle.deriveKey(
+      { name: 'HKDF', hash: 'SHA-256', salt: sid, info: te.encode(PROTO + '/sig') },
+      master, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+    return { enc, auth, sig };
   }
 
   /** New session: 16-byte session id + 32-byte master key (only ever in the URL fragment). */
@@ -559,6 +582,36 @@ dialog video { width: 100%; border-radius: var(--radius); background: #000; disp
     return subtle.verify('HMAC', sess.keys.auth, tag, concat(te.encode(PROTO + '/resp'), concat(sess.sid, nonce)));
   }
 
+  // ---------- relay messages (automatic pairing) ----------
+  // Sealed with a separate HKDF key; random 96-bit IV; AAD binds the session id.
+  async function sealSignal(sess, text) {
+    const iv = rand(12);
+    const ct = new Uint8Array(await subtle.encrypt(
+      { name: 'AES-GCM', iv, additionalData: concat(sess.sid, te.encode(PROTO + '/sig')), tagLength: 128 },
+      sess.keys.sig, te.encode(text)));
+    return concat(iv, ct);
+  }
+
+  async function openSignal(sess, bytes) {
+    if (!(bytes instanceof Uint8Array) || bytes.length < 12 + GCM_TAG || bytes.length > 8192) throw new Error('Bad relay message');
+    const pt = await subtle.decrypt(
+      { name: 'AES-GCM', iv: bytes.subarray(0, 12), additionalData: concat(sess.sid, te.encode(PROTO + '/sig')), tagLength: 128 },
+      sess.keys.sig, bytes.subarray(12));
+    return new TextDecoder().decode(pt);
+  }
+
+  /** Relay topic: derived from the session id; unlinkable to it without the id. */
+  async function signalTopic(sess) {
+    const h = new Uint8Array(await subtle.digest('SHA-256', concat(te.encode(PROTO + '/topic'), sess.sid)));
+    return 'pairwise/' + hex(h.subarray(0, 16));
+  }
+
+  /** Short tag that ties an answer to the exact offer it answers. */
+  async function offerTag(compact) {
+    const h = new Uint8Array(await subtle.digest('SHA-256', te.encode(String(compact))));
+    return hex(h.subarray(0, 8));
+  }
+
   // ---------- compact signaling (SDP <-> short string for QR codes) ----------
   // Only what a data-channel-only session needs: ICE credentials, DTLS fingerprint,
   // DTLS role, max message size and UDP candidates. Everything else is a fixed template.
@@ -623,10 +676,11 @@ dialog video { width: 100%; border-radius: var(--radius); background: #000; disp
     return L.join('\r\n') + '\r\n';
   }
 
-  // Offer link fragment: #pw1!<sid>!<key>!<compact offer>   (key never leaves the fragment)
+  // Offer link fragment: #pw1!<sid>!<key>!<compact offer>[!a]  (key never leaves the fragment;
+  //                     a trailing "!a" means the sender listens on the pairing relays)
   // Answer code:          pwa1!<sid>!<compact answer>        (contains no key material)
-  function offerFragment(sess, compact) {
-    return PROTO + '!' + b64u(sess.sid) + '!' + b64u(sess.key) + '!' + compact;
+  function offerFragment(sess, compact, auto) {
+    return PROTO + '!' + b64u(sess.sid) + '!' + b64u(sess.key) + '!' + compact + (auto ? '!a' : '');
   }
 
   function parseOffer(text) {
@@ -635,11 +689,11 @@ dialog video { width: 100%; border-radius: var(--radius); background: #000; disp
     if (h !== -1) s = s.slice(h + 1);
     try { s = decodeURIComponent(s); } catch (e) { /* keep raw */ }
     const parts = s.split('!');
-    if (parts.length !== 4 || parts[0] !== PROTO) throw new Error('This is not a Pairwise sender code');
+    if ((parts.length !== 4 && !(parts.length === 5 && parts[4] === 'a')) || parts[0] !== PROTO) throw new Error('This is not a Pairwise sender code');
     const sid = unb64u(parts[1]), key = unb64u(parts[2]);
     if (sid.length !== 16 || key.length !== 32) throw new Error('Sender code is damaged');
     expandSdp(parts[3]); // validate
-    return { sid, key, compact: parts[3] };
+    return { sid, key, compact: parts[3], auto: parts.length === 5 };
   }
 
   function answerCode(sid, compact) { return 'pwa1!' + b64u(sid) + '!' + compact; }
@@ -662,6 +716,7 @@ dialog video { width: 100%; border-radius: var(--radius); background: #000; disp
     encodeChunkAt, prepare, finalDigest, chainStep, chunkBytesAt,
     newSession, openSession, sealFrame, openFrame, frameHeader,
     encodeManifest, decodeManifest, authTag, authVerify,
+    sealSignal, openSignal, signalTopic, offerTag,
     compactSdp, expandSdp, offerFragment, parseOffer, answerCode, parseAnswer
   };
 })(typeof window !== 'undefined' ? window : globalThis);
@@ -1059,6 +1114,195 @@ dialog video { width: 100%; border-radius: var(--radius); background: #000; disp
   global.PW = { Sender, Receiver, describeCandidate };
 })(typeof window !== 'undefined' ? window : globalThis);
 </script>
+<script>/* Pairwise automatic pairing: carries the receiver's encrypted connection answer back
+ * to the sender through public MQTT-over-WebSocket brokers, so the receiver only has
+ * to open the link. Brokers see an opaque AES-GCM blob on a random-looking topic:
+ * never the key, never the text, never readable connection details. */
+(function (global) {
+  'use strict';
+  const LT = global.LT;
+  const te = new TextEncoder(), td = new TextDecoder();
+
+  const DEFAULT_RELAYS = [
+    { url: 'wss://broker.emqx.io:8084/mqtt', label: 'broker.emqx.io' },
+    { url: 'wss://broker.hivemq.com:8884/mqtt', label: 'broker.hivemq.com' },
+    { url: 'wss://test.mosquitto.org:8081/mqtt', label: 'test.mosquitto.org' }
+  ];
+
+  // ---------- minimal MQTT 3.1.1 client (QoS 0 publish/subscribe only) ----------
+  function mstr(s) {
+    const b = te.encode(s);
+    const o = new Uint8Array(2 + b.length);
+    o[0] = b.length >> 8; o[1] = b.length & 255; o.set(b, 2);
+    return o;
+  }
+  function packet(type, parts) {
+    const len = parts.reduce((a, p) => a + p.length, 0);
+    const vi = [];
+    let n = len;
+    do { let d = n % 128; n = Math.floor(n / 128); if (n > 0) d |= 128; vi.push(d); } while (n > 0);
+    const o = new Uint8Array(1 + vi.length + len);
+    o[0] = type; o.set(vi, 1);
+    let off = 1 + vi.length;
+    for (const p of parts) { o.set(p, off); off += p.length; }
+    return o;
+  }
+
+  class MqttWs {
+    constructor(cfg, onEvent) {
+      this.cfg = cfg; this.onEvent = onEvent;
+      this.subs = new Map(); this.buf = new Uint8Array(0); this.queue = [];
+      this.open = false; this.closed = false; this.pid = 1;
+    }
+    connect() {
+      let ws;
+      try { ws = new WebSocket(this.cfg.url, 'mqtt'); } catch (e) { this.onEvent('fail', e && e.message ? e.message : String(e)); return; }
+      ws.binaryType = 'arraybuffer';
+      this.ws = ws;
+      ws.onopen = () => {
+        const flags = 0x02 | (this.cfg.username ? 0x80 : 0) | (this.cfg.password ? 0x40 : 0);
+        const parts = [mstr('MQTT'), new Uint8Array([4, flags, 0, 30]), mstr('pw' + LT.hex(LT.rand(8)))];
+        if (this.cfg.username) parts.push(mstr(this.cfg.username));
+        if (this.cfg.password) parts.push(mstr(this.cfg.password));
+        ws.send(packet(0x10, parts));
+      };
+      ws.onmessage = (e) => { if (e.data instanceof ArrayBuffer) this.onData(new Uint8Array(e.data)); };
+      ws.onerror = () => {};
+      ws.onclose = () => {
+        const was = this.open;
+        this.open = false;
+        clearInterval(this.ping); clearTimeout(this.timer);
+        if (!this.closed) { this.closed = true; this.onEvent(was ? 'closed' : 'fail', 'connection closed'); }
+      };
+      this.timer = setTimeout(() => { if (!this.open) { this.onEvent('fail', 'timed out'); this.close(); } }, 10000);
+    }
+    onData(chunk) {
+      const b = new Uint8Array(this.buf.length + chunk.length);
+      b.set(this.buf); b.set(chunk, this.buf.length);
+      this.buf = b;
+      for (;;) {
+        if (this.buf.length < 2) return;
+        let mult = 1, len = 0, i = 1, byte;
+        do {
+          if (i >= this.buf.length) return;
+          if (i > 4) { this.close(); return; }
+          byte = this.buf[i++];
+          len += (byte & 127) * mult; mult *= 128;
+        } while (byte & 128);
+        if (this.buf.length < i + len) return;
+        const type = this.buf[0];
+        const body = this.buf.slice(i, i + len);
+        this.buf = this.buf.slice(i + len);
+        this.handle(type, body);
+      }
+    }
+    handle(type, body) {
+      const kind = type >> 4;
+      if (kind === 2) { // CONNACK
+        clearTimeout(this.timer);
+        if (body.length < 2 || body[1] !== 0) { this.onEvent('fail', 'refused'); this.close(); return; }
+        this.open = true;
+        this.ping = setInterval(() => this.send(new Uint8Array([0xC0, 0])), 20000);
+        for (const t of this.subs.keys()) this.sendSub(t);
+        const q = this.queue; this.queue = [];
+        q.forEach((p) => this.send(p));
+        this.onEvent('open');
+      } else if (kind === 3) { // PUBLISH
+        if (body.length < 2) return;
+        const qos = (type >> 1) & 3;
+        const tl = (body[0] << 8) | body[1];
+        const topic = td.decode(body.subarray(2, 2 + tl));
+        const off = 2 + tl + (qos > 0 ? 2 : 0);
+        const cb = this.subs.get(topic);
+        if (cb) cb(body.slice(off));
+      }
+    }
+    send(p) { if (this.ws && this.ws.readyState === 1) { try { this.ws.send(p); } catch (e) { /* ignore */ } } }
+    sendSub(topic) {
+      const id = (this.pid++ & 0xffff) || 1;
+      this.send(packet(0x82, [new Uint8Array([id >> 8, id & 255]), mstr(topic), new Uint8Array([0])]));
+    }
+    subscribe(topic, cb) { this.subs.set(topic, cb); if (this.open) this.sendSub(topic); }
+    publish(topic, bytes) {
+      const p = packet(0x30, [mstr(topic), bytes]);
+      if (this.open) this.send(p); else if (this.queue.length < 8) this.queue.push(p);
+    }
+    close() {
+      this.closed = true;
+      clearTimeout(this.timer); clearInterval(this.ping);
+      try { if (this.ws && this.ws.readyState === 1) this.ws.send(new Uint8Array([0xE0, 0])); } catch (e) { /* ignore */ }
+      try { if (this.ws) this.ws.close(); } catch (e) { /* ignore */ }
+      this.open = false;
+    }
+  }
+
+  // ---------- encrypted signaling over several brokers at once ----------
+  class Signal {
+    constructor(sess, relays, onEvent) {
+      this.sess = sess;
+      this.relays = relays && relays.length ? relays : DEFAULT_RELAYS;
+      this.onEvent = onEvent || function () {};
+      this.clients = [];
+      this.openCount = 0;
+      this.failed = 0;
+      this.topic = null;
+      this.handler = null;
+      this.closed = false;
+      this.repeat = 0;
+    }
+    async start() {
+      this.topic = await LT.signalTopic(this.sess);
+      for (const cfg of this.relays) {
+        const c = new MqttWs(cfg, (type, detail) => {
+          if (this.closed) return;
+          if (type === 'open') { this.openCount++; this.onEvent('log', 'Pairing relay connected: ' + cfg.label); }
+          else if (type === 'fail') { this.failed++; this.onEvent('log', 'Pairing relay unavailable: ' + cfg.label + ' (' + detail + ')'); }
+          else if (type === 'closed') { this.openCount = Math.max(0, this.openCount - 1); this.onEvent('log', 'Pairing relay disconnected: ' + cfg.label); }
+          this.onEvent('status', { open: this.openCount, failed: this.failed, total: this.relays.length });
+        });
+        if (this.handler) c.subscribe(this.topic, this.handler);
+        this.clients.push(c);
+        c.connect();
+      }
+    }
+    /** Sender: receive decrypted answers. Messages that fail authentication are ignored. */
+    listen(onMessage) {
+      let lastSeen = '';
+      this.handler = async (bytes) => {
+        try {
+          const text = await LT.openSignal(this.sess, bytes);
+          if (text === lastSeen) return; // the same answer arrives once per relay
+          lastSeen = text;
+          onMessage(text);
+        } catch (e) { /* not ours, or tampered: ignore */ }
+      };
+      for (const c of this.clients) c.subscribe(this.topic, this.handler);
+    }
+    /** Receiver: publish the encrypted answer now and every 2.5 s until stopped. */
+    async publishRepeatedly(text, maxMs) {
+      const sealed = await LT.sealSignal(this.sess, text);
+      const t0 = Date.now();
+      const send = () => {
+        if (this.closed || Date.now() - t0 > (maxMs || 180000)) { this.stopRepeat(); return; }
+        for (const c of this.clients) c.publish(this.topic, sealed);
+      };
+      this.stopRepeat();
+      send();
+      this.repeat = setInterval(send, 2500);
+    }
+    stopRepeat() { clearInterval(this.repeat); this.repeat = 0; }
+    close() {
+      if (this.closed) return;
+      this.closed = true;
+      this.stopRepeat();
+      this.clients.forEach((c) => c.close());
+      this.clients = [];
+    }
+  }
+
+  global.PWR = { Signal, MqttWs, DEFAULT_RELAYS };
+})(typeof window !== 'undefined' ? window : globalThis);
+</script>
 <script>/* Pairwise UI. Wires the DOM to LT (core) and PW (transport). */
 (function () {
   'use strict';
@@ -1102,6 +1346,11 @@ dialog video { width: 100%; border-radius: var(--radius); background: #000; disp
   }
   function setChip(el, text, kind) { el.textContent = text; el.className = 'chip' + (kind ? ' ' + kind : ''); }
   function errMsg(e) { return e && e.message ? e.message : String(e); }
+  function relays() {
+    const m = TEST && /[?&]relay=([^&]+)/.exec(location.search);
+    if (m) return [{ url: decodeURIComponent(m[1]), label: 'test relay' }];
+    return PWR.DEFAULT_RELAYS;
+  }
   function iceServers() {
     const list = [];
     if ($('use-stun').checked) list.push({ urls: 'stun:stun.l.google.com:19302' });
@@ -1300,6 +1549,8 @@ dialog video { width: 100%; border-radius: var(--radius); background: #000; disp
   const bigView = new VirtualView($('bigview'));
   let bigText = null;        // set when content is too large for the textarea
   let sender = null;
+  let sendSignal = null;     // relay listener for automatic pairing
+  let currentOfferTag = '';
   let sendExpiry = 0, sendTimer = 0, sendStart = 0;
   let statsTimer = 0;
 
@@ -1396,7 +1647,7 @@ dialog video { width: 100%; border-radius: var(--radius); background: #000; disp
     $('btn-paste').disabled = locked;
     $('btn-clear').disabled = locked;
     $('file-input').disabled = locked;
-    $('ttl').disabled = locked; $('use-stun').disabled = locked;
+    $('ttl').disabled = locked; $('use-stun').disabled = locked; $('use-relay').disabled = locked;
     ['turn-url', 'turn-user', 'turn-pass'].forEach((id) => { $(id).disabled = locked; });
   }
 
@@ -1421,6 +1672,15 @@ dialog video { width: 100%; border-radius: var(--radius); background: #000; disp
       const ttlMin = parseInt($('ttl').value, 10) || 15;
       sendExpiry = Date.now() + ttlMin * 60000;
       sender = new PW.Sender({ text, manifest, sess, iceServers: ice, expiresAt: sendExpiry, onEvent: onSenderEvent });
+      if ($('use-relay').checked) {
+        sendSignal = new PWR.Signal(sess, relays(), onSignalEvent);
+        sendSignal.listen(onRelayAnswer);
+        await sendSignal.start();
+        $('manual-pair').open = false;
+      } else {
+        $('manual-pair').open = true;
+      }
+      setAutoStatus();
       $('prepare-status').textContent = 'Gathering network candidates…';
       if (!ice.length) log('No STUN or TURN configured: only local-network connections will work');
       await showOffer();
@@ -1440,8 +1700,36 @@ dialog video { width: 100%; border-radius: var(--radius); background: #000; disp
     }
   });
 
+  function setAutoStatus(text) {
+    const el = $('auto-status');
+    if (text) { el.textContent = text; return; }
+    if (!sendSignal) { el.textContent = 'Automatic pairing is off. Open Pair manually instead below.'; return; }
+    el.textContent = 'Waiting for the other device to open the link…';
+  }
+
+  function onSignalEvent(type, data) {
+    if (type === 'log') log(data);
+    else if (type === 'status' && sendSignal && data.open === 0 && data.failed === data.total) {
+      setAutoStatus('No pairing relay is reachable from this network. Use Pair manually instead.');
+      $('manual-pair').open = true;
+    }
+  }
+
+  async function onRelayAnswer(text) {
+    if (!sender || !sender.peer) return;
+    let msg;
+    try { msg = JSON.parse(text); } catch (e) { return; }
+    if (!msg || typeof msg.a !== 'string' || msg.f !== currentOfferTag) return; // reply to an older code
+    if (sender.peer.pc.signalingState !== 'have-local-offer') return;          // already paired
+    log('Reply received through the pairing relay');
+    setAutoStatus('The other device answered. Connecting…');
+    await applyAnswer(msg.a);
+  }
+
   async function showOffer() {
-    const frag = await sender.createOffer();
+    const frag0 = await sender.createOffer();
+    const frag = frag0 + (sendSignal ? '!a' : '');
+    currentOfferTag = await LT.offerTag(frag0.split('!')[3]);
     const base = location.href.split('#')[0].split('?')[0];
     const link = base + '#' + frag;
     const modules = drawQR($('send-qr'), link);
@@ -1503,6 +1791,7 @@ dialog video { width: 100%; border-radius: var(--radius); background: #000; disp
       r.className = 'notice ok'; r.hidden = false;
       r.textContent = 'Delivered and verified. The recipient rebuilt the text and its SHA-256 integrity digest matches: ' + groupHex(data.digest);
       log('Recipient confirmed the integrity digest');
+      if (sendSignal) { sendSignal.close(); sendSignal = null; }
     } else if (type === 'disconnected') {
       if (!sender || sender.verified) return;
       setChip($('send-state'), 'disconnected', 'warn');
@@ -1525,6 +1814,7 @@ dialog video { width: 100%; border-radius: var(--radius); background: #000; disp
     if (!sender) return;
     try {
       await showOffer();
+      setAutoStatus();
       $('send-pair').hidden = false;
       $('send-resume').hidden = true;
       $('send-result').hidden = true;
@@ -1534,6 +1824,7 @@ dialog video { width: 100%; border-radius: var(--radius); background: #000; disp
 
   function endSendSession(notify, message) {
     if (prepareAbort) prepareAbort.abort();
+    if (sendSignal) { sendSignal.close(); sendSignal = null; }
     if (sender) { sender.destroy(notify); sender = null; log('Send session ended; key material discarded'); }
     clearInterval(sendTimer);
     const c = $('send-qr'); c.getContext('2d').clearRect(0, 0, c.width, c.height);
@@ -1557,6 +1848,8 @@ dialog video { width: 100%; border-radius: var(--radius); background: #000; disp
   // ===================================================== RECEIVE side
   const recvView = new VirtualView($('recvview'));
   let receiver = null, receivedText = null, recvExpiry = 0, recvTimer = 0, recvStart = 0;
+  let recvSignal = null;
+  function stopRecvSignal() { if (recvSignal) { recvSignal.close(); recvSignal = null; } }
 
   function ensureReceiver() {
     if (!receiver) {
@@ -1573,18 +1866,39 @@ dialog video { width: 100%; border-radius: var(--radius); background: #000; disp
     try { offer = LT.parseOffer(text); } catch (e) { $('offer-error').textContent = errMsg(e); $('offer-error').style.color = 'var(--bad)'; return; }
     showTab('recv');
     $('answer-out').value = '';
+    $('recv-connect').hidden = true;
+    $('recv-answer').hidden = false;
+    $('recv-issue').hidden = true;
+    setChip($('recv-state'), 'connecting', 'live');
+    $('recv-manual').open = !offer.auto;
+    $('recv-auto-status').textContent = offer.auto
+      ? 'Connecting to the sender. The text is decrypted on this device as soon as it arrives.'
+      : 'The sender turned off automatic pairing. Open Pair manually and show the reply code to the sender.';
     try {
       const r = ensureReceiver();
-      log(r.sess ? 'New code for the same session: reconnecting to resume' : 'Sender code accepted; building a connection answer');
+      log(r.sess ? 'New code for the same session: reconnecting to resume' : 'Sender code accepted; preparing the connection');
       const answer = await r.acceptOffer(offer);
       drawQR($('recv-qr'), answer);
       $('answer-out').value = answer;
-      $('recv-connect').hidden = true;
-      $('recv-answer').hidden = false;
-      $('recv-issue').hidden = true;
-      setChip($('recv-state'), 'waiting for sender', 'live');
-      log('Answer ready (' + answer.length + ' characters). Show it to the sending device.');
+      if (offer.auto) {
+        stopRecvSignal();
+        recvSignal = new PWR.Signal(r.sess, relays(), (type, data) => {
+          if (type === 'log') log(data);
+          else if (type === 'status' && data.open === 0 && data.failed === data.total) {
+            $('recv-auto-status').textContent = 'No pairing relay is reachable from this network. Open Pair manually and show the reply code to the sender.';
+            $('recv-manual').open = true;
+          }
+        });
+        await recvSignal.start();
+        const tag = await LT.offerTag(offer.compact);
+        await recvSignal.publishRepeatedly(JSON.stringify({ a: answer, f: tag }), 180000);
+        log('Sent the encrypted connection reply through the pairing relays');
+      } else {
+        log('Reply ready (' + answer.length + ' characters). Show it to the sending device.');
+      }
     } catch (e) {
+      $('recv-answer').hidden = true;
+      $('recv-connect').hidden = false;
       $('offer-error').textContent = errMsg(e);
       $('offer-error').style.color = 'var(--bad)';
       log('Pairing failed: ' + errMsg(e));
@@ -1599,7 +1913,7 @@ dialog video { width: 100%; border-radius: var(--radius); background: #000; disp
       if (text) startReceive(text);
     } catch (e) { toast(errMsg(e)); }
   });
-  $('btn-copy-answer').addEventListener('click', () => copyText($('answer-out').value, 'Answer code'));
+  $('btn-copy-answer').addEventListener('click', () => copyText($('answer-out').value, 'Reply code'));
   $('btn-recv-cancel').addEventListener('click', () => resetReceive(true));
 
   function startRecvTimer() {
@@ -1620,6 +1934,7 @@ dialog video { width: 100%; border-radius: var(--radius); background: #000; disp
     if (type === 'log') log(data);
     else if (type === 'state') {
       if (data === 'connected' || data === 'receiving') {
+        stopRecvSignal();
         $('recv-answer').hidden = true;
         $('recv-progress').hidden = false;
         $('recv-issue').hidden = true;
@@ -1648,6 +1963,8 @@ dialog video { width: 100%; border-radius: var(--radius); background: #000; disp
       $('rr-lines').textContent = nf.format(data.manifest.lines);
       $('rr-bytes').textContent = fmtBytes(data.manifest.bytes);
       recvView.setText(receivedText);
+      if (!$('save-name').value) $('save-name').value = defaultSaveName();
+      stopRecvSignal();
       log('Transfer complete and verified');
       // Close the connection and drop the key; keep only the decrypted text.
       setTimeout(() => { if (receiver) { receiver.destroy(true, true); receiver = null; log('Connection closed; key material discarded'); } }, 400);
@@ -1672,6 +1989,7 @@ dialog video { width: 100%; border-radius: var(--radius); background: #000; disp
   }
 
   function resetReceive(notify, message) {
+    stopRecvSignal();
     if (receiver) { receiver.destroy(notify, false); receiver = null; }
     clearInterval(recvTimer);
     recvExpiry = 0; recvStart = 0;
@@ -1686,19 +2004,44 @@ dialog video { width: 100%; border-radius: var(--radius); background: #000; disp
   }
 
   $('btn-copy-all').addEventListener('click', () => { if (receivedText !== null) copyText(receivedText, nf.format(receivedText.length) + ' characters'); });
-  $('btn-download').addEventListener('click', () => {
+  function defaultSaveName() { return 'pairwise-' + new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19).replace('T', '_'); }
+  function cleanFileName(name) {
+    const n = String(name || '').replace(/[\u0000-\u001f\u007f<>:"/\\|?*]/g, '_').replace(/^[.\s]+|[.\s]+$/g, '').slice(0, 200);
+    return n || defaultSaveName();
+  }
+  $('btn-download').addEventListener('click', async () => {
     if (receivedText === null) return;
-    const blob = new Blob([receivedText], { type: 'text/plain;charset=utf-8' });
+    const name = cleanFileName($('save-name').value);
+    $('save-name').value = name;
+    // Raw bytes with a generic type, so the browser keeps the name exactly as typed
+    // (no .txt appended when there is no extension).
+    const blob = new Blob([receivedText], { type: 'application/octet-stream' });
+    if (typeof window.showSaveFilePicker === 'function') {
+      try {
+        const handle = await window.showSaveFilePicker({ suggestedName: name });
+        const w = await handle.createWritable();
+        await w.write(blob);
+        await w.close();
+        toast('Saved ' + handle.name);
+        log('Saved ' + fmtBytes(blob.size) + ' to ' + handle.name);
+        return;
+      } catch (e) {
+        if (e && e.name === 'AbortError') return; // user cancelled the dialog
+        // Otherwise fall back to a regular download.
+      }
+    }
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = 'pairwise-' + new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19) + '.txt';
+    a.download = name;
     document.body.appendChild(a); a.click(); a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 30000);
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+    log('Downloaded ' + fmtBytes(blob.size) + ' as ' + name);
   });
   $('btn-recv-clear').addEventListener('click', () => {
     receivedText = null;
     recvView.clear();
+    $('save-name').value = '';
     $('recv-result').hidden = true;
     resetReceive(true);
     $('offer-error').textContent = '';
