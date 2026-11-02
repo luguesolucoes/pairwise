@@ -1,14 +1,16 @@
-/* Pairwise core: encoding, chunking, crypto, framing, compact signaling.
- * Pure functions only (no DOM). Exposed as window.LT for the UI and tests.
+/* Pairwise core: encoding, chunking, crypto, framing and the stored-blob format.
+ * Pure functions only (no DOM, no network). Exposed as window.LT for the UI and tests.
  * Uses only the Web Crypto API; no custom cryptography. */
 (function (global) {
   'use strict';
 
   const PROTO = 'pw1';
-  const CHUNK_BYTES = 48 * 1024;          // plaintext bytes per chunk (frame stays < 64 KiB)
+  const CHUNK_BYTES = 48 * 1024;          // plaintext bytes per chunk
   const FRAME_HEADER = 5;                 // u8 type + u32 index
   const GCM_TAG = 16;
   const T_DATA = 1, T_MANIFEST = 2;
+  const MAGIC = new Uint8Array([0x50, 0x57, 0x42, 0x31]); // "PWB1"
+  const MAX_FRAME = CHUNK_BYTES + FRAME_HEADER + GCM_TAG + 64;
   const te = new TextEncoder();
   const subtle = global.crypto && global.crypto.subtle;
 
@@ -17,9 +19,7 @@
 
   function b64u(bytes) {
     let s = '';
-    for (let i = 0; i < bytes.length; i += 0x8000) {
-      s += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
-    }
+    for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
     return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
   }
 
@@ -51,6 +51,8 @@
     for (let i = 0; i < a.length; i++) d |= a[i] ^ b[i];
     return d === 0;
   }
+
+  function u32be(n) { const b = new Uint8Array(4); new DataView(b.buffer).setUint32(0, n >>> 0); return b; }
 
   // ---------- text statistics ----------
   /** UTF-8 byte length without allocating an encoded copy. Lone surrogates count as 3 (U+FFFD). */
@@ -169,6 +171,9 @@
   }
 
   // ---------- keys ----------
+  // The 32-byte master key lives only in the URL fragment. HKDF-SHA-256, salted with the
+  // 16-byte session id, derives one non-extractable AES-256-GCM key. The server never sees
+  // the master key or the derived key.
   async function importMaster(raw) {
     if (!(raw instanceof Uint8Array) || raw.length !== 32) throw new Error('Key must be 32 bytes');
     return subtle.importKey('raw', raw, 'HKDF', false, ['deriveKey']);
@@ -178,31 +183,22 @@
     const enc = await subtle.deriveKey(
       { name: 'HKDF', hash: 'SHA-256', salt: sid, info: te.encode(PROTO + '/enc') },
       master, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
-    const auth = await subtle.deriveKey(
-      { name: 'HKDF', hash: 'SHA-256', salt: sid, info: te.encode(PROTO + '/auth') },
-      master, { name: 'HMAC', hash: 'SHA-256', length: 256 }, false, ['sign', 'verify']);
-    const sig = await subtle.deriveKey(
-      { name: 'HKDF', hash: 'SHA-256', salt: sid, info: te.encode(PROTO + '/sig') },
-      master, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
-    return { enc, auth, sig };
+    return { enc };
   }
 
-  /** New session: 16-byte session id + 32-byte master key (only ever in the URL fragment). */
   async function newSession() {
     const sid = rand(16), key = rand(32);
-    const keys = await deriveKeys(await importMaster(key), sid);
-    return { sid, key, keys };
+    return { sid, key, keys: await deriveKeys(await importMaster(key), sid) };
   }
 
   async function openSession(sid, key) {
-    if (sid.length !== 16) throw new Error('Invalid session id');
+    if (sid.length !== 16 || key.length !== 32) throw new Error('Invalid session material');
     return { sid, key, keys: await deriveKeys(await importMaster(key), sid) };
   }
 
   // ---------- framing ----------
-  // IV (96 bit) = u32 frame type || u64 index. The key is unique per session and each
-  // (type, index) pair encrypts exactly one fixed plaintext, so nonces never repeat with
-  // different plaintexts, including on resume.
+  // IV (96 bit) = u32 frame type || u64 index. The key is unique per blob and each
+  // (type, index) pair encrypts exactly one fixed plaintext, so nonces never repeat.
   function ivFor(type, index) {
     const iv = new Uint8Array(12);
     const dv = new DataView(iv.buffer);
@@ -211,6 +207,8 @@
     return iv;
   }
 
+  // AAD = session id || frame type || index || total count. Binds every chunk to its
+  // position and to this session, so altered, reordered, truncated or foreign chunks fail.
   function aadFor(sid, type, index, count) {
     const a = new Uint8Array(16 + 9);
     a.set(sid, 0);
@@ -239,7 +237,7 @@
     return { type: dv.getUint8(0), index: dv.getUint32(1) };
   }
 
-  /** Throws (OperationError) if the frame was tampered with, reordered or replayed from another session. */
+  /** Throws (OperationError) if the frame was tampered with, reordered or sealed with a different key. */
   async function openFrame(sess, frame, count) {
     const { type, index } = frameHeader(frame);
     const pt = await subtle.decrypt(
@@ -251,7 +249,7 @@
   function encodeManifest(m, expiresAt) {
     return te.encode(JSON.stringify({
       v: 1, count: m.count, bytes: m.totalBytes, chars: m.chars, lines: m.lines,
-      unpaired: m.unpaired, digest: hex(m.digest), exp: expiresAt
+      unpaired: m.unpaired, digest: hex(m.digest), exp: expiresAt || 0
     }));
   }
 
@@ -263,149 +261,75 @@
     return o;
   }
 
-  async function authTag(sess, nonce) {
-    return new Uint8Array(await subtle.sign('HMAC', sess.keys.auth, concat(te.encode(PROTO + '/resp'), concat(sess.sid, nonce))));
-  }
+  // ---------- stored blob format ----------
+  // MAGIC "PWB1" then length-prefixed records: [u32 len][frame]. Record 0 is the manifest
+  // frame; records 1..count are the data frames in order. This is what gets uploaded.
+  function blobRecord(frame) { return [u32be(frame.length), frame]; }
 
-  async function authVerify(sess, nonce, tag) {
-    return subtle.verify('HMAC', sess.keys.auth, tag, concat(te.encode(PROTO + '/resp'), concat(sess.sid, nonce)));
-  }
-
-  // ---------- relay messages (automatic pairing) ----------
-  // Sealed with a separate HKDF key; random 96-bit IV; AAD binds the session id.
-  async function sealSignal(sess, text) {
-    const iv = rand(12);
-    const ct = new Uint8Array(await subtle.encrypt(
-      { name: 'AES-GCM', iv, additionalData: concat(sess.sid, te.encode(PROTO + '/sig')), tagLength: 128 },
-      sess.keys.sig, te.encode(text)));
-    return concat(iv, ct);
-  }
-
-  async function openSignal(sess, bytes) {
-    if (!(bytes instanceof Uint8Array) || bytes.length < 12 + GCM_TAG || bytes.length > 8192) throw new Error('Bad relay message');
-    const pt = await subtle.decrypt(
-      { name: 'AES-GCM', iv: bytes.subarray(0, 12), additionalData: concat(sess.sid, te.encode(PROTO + '/sig')), tagLength: 128 },
-      sess.keys.sig, bytes.subarray(12));
-    return new TextDecoder().decode(pt);
-  }
-
-  /** Relay topic: derived from the session id; unlinkable to it without the id. */
-  async function signalTopic(sess) {
-    const h = new Uint8Array(await subtle.digest('SHA-256', concat(te.encode(PROTO + '/topic'), sess.sid)));
-    return 'pairwise/' + hex(h.subarray(0, 16));
-  }
-
-  /** Short tag that ties an answer to the exact offer it answers. */
-  async function offerTag(compact) {
-    const h = new Uint8Array(await subtle.digest('SHA-256', te.encode(String(compact))));
-    return hex(h.subarray(0, 8));
-  }
-
-  // ---------- compact signaling (SDP <-> short string for QR codes) ----------
-  // Only what a data-channel-only session needs: ICE credentials, DTLS fingerprint,
-  // DTLS role, max message size and UDP candidates. Everything else is a fixed template.
-  const CAND_TYPES = { host: 'h', srflx: 's', relay: 'r', prflx: 'p' };
-  const CAND_NAMES = { h: 'host', s: 'srflx', r: 'relay', p: 'prflx' };
-  const SETUP = { actpass: 'x', active: 'a', passive: 'p' };
-  const SETUP_NAMES = { x: 'actpass', a: 'active', p: 'passive' };
-
-  function compactSdp(sdp) {
-    const get = (re) => { const m = sdp.match(re); return m ? m[1].trim() : null; };
-    const ufrag = get(/^a=ice-ufrag:(.+)$/m);
-    const pwd = get(/^a=ice-pwd:(.+)$/m);
-    const fp = get(/^a=fingerprint:sha-256 (.+)$/mi);
-    const setup = get(/^a=setup:(\w+)$/m) || 'actpass';
-    const mms = get(/^a=max-message-size:(\d+)$/m) || '65536';
-    if (!ufrag || !pwd || !fp) throw new Error('Session description is missing ICE or DTLS data');
-    const fpBytes = new Uint8Array(fp.split(':').map((x) => parseInt(x, 16)));
-    if (fpBytes.length !== 32 || fpBytes.some((x) => Number.isNaN(x))) throw new Error('Unsupported DTLS fingerprint');
-    const cands = [];
-    const seen = new Set();
-    const re = /^a=candidate:\S+ (\d+) (\S+) \d+ (\S+) (\d+) typ (\w+)/gm;
-    let m;
-    while ((m = re.exec(sdp))) {
-      const [, comp, proto, addr, port, typ] = m;
-      if (comp !== '1' || proto.toLowerCase() !== 'udp' || !CAND_TYPES[typ]) continue;
-      const k = addr + ':' + port;
-      if (seen.has(k)) continue;
-      seen.add(k);
-      cands.push(CAND_TYPES[typ] + ',' + addr + ',' + port);
+  /** Incrementally splits a downloaded blob stream back into whole frames. */
+  class FrameSplitter {
+    constructor(maxFrame) {
+      this.max = maxFrame || MAX_FRAME;
+      this.buf = new Uint8Array(0);
+      this.off = 0;
+      this.magicChecked = false;
     }
-    if (!cands.length) throw new Error('No usable network candidates were found');
-    for (const s of [ufrag, pwd]) if (/[~!,\s]/.test(s)) throw new Error('Unexpected ICE credential format');
-    return [ufrag, pwd, b64u(fpBytes), SETUP[setup] || 'x', mms].concat(cands).join('~');
+    _pending() { return this.buf.length - this.off; }
+    push(chunk) {
+      if (chunk && chunk.length) {
+        const merged = new Uint8Array(this._pending() + chunk.length);
+        merged.set(this.buf.subarray(this.off), 0);
+        merged.set(chunk, this._pending());
+        this.buf = merged; this.off = 0;
+      }
+      const frames = [];
+      if (!this.magicChecked) {
+        if (this._pending() < MAGIC.length) return frames;
+        if (!equalBytes(this.buf.subarray(this.off, this.off + MAGIC.length), MAGIC)) throw new Error('Not a Pairwise blob');
+        this.off += MAGIC.length;
+        this.magicChecked = true;
+      }
+      for (;;) {
+        if (this._pending() < 4) break;
+        const len = new DataView(this.buf.buffer, this.buf.byteOffset + this.off, 4).getUint32(0);
+        if (len < FRAME_HEADER + GCM_TAG || len > this.max) throw new Error('Corrupt blob framing');
+        if (this._pending() < 4 + len) break;
+        frames.push(this.buf.slice(this.off + 4, this.off + 4 + len));
+        this.off += 4 + len;
+      }
+      if (this.off > 0) { this.buf = this.buf.slice(this.off); this.off = 0; }
+      return frames;
+    }
+    end() { if (this._pending() !== 0 || !this.magicChecked) throw new Error('Blob ended mid-frame (truncated download)'); }
   }
 
-  function expandSdp(compact) {
-    const parts = String(compact).split('~');
-    if (parts.length < 6) throw new Error('Pairing data is incomplete');
-    const [ufrag, pwd, fpB64, setupC, mms] = parts;
-    const fpBytes = unb64u(fpB64);
-    if (fpBytes.length !== 32) throw new Error('Pairing data has an invalid fingerprint');
-    if (!SETUP_NAMES[setupC] || !/^\d{1,9}$/.test(mms)) throw new Error('Pairing data is malformed');
-    const fpHex = Array.from(fpBytes, (b) => b.toString(16).padStart(2, '0').toUpperCase()).join(':');
-    const sessId = String(Date.now()) + String(Math.floor(Math.random() * 1e6));
-    const L = [
-      'v=0', 'o=- ' + sessId + ' 2 IN IP4 127.0.0.1', 's=-', 't=0 0',
-      'a=group:BUNDLE 0', 'a=msid-semantic: WMS',
-      'm=application 9 UDP/DTLS/SCTP webrtc-datachannel', 'c=IN IP4 0.0.0.0',
-      'a=ice-ufrag:' + ufrag, 'a=ice-pwd:' + pwd, 'a=ice-options:trickle',
-      'a=fingerprint:sha-256 ' + fpHex, 'a=setup:' + SETUP_NAMES[setupC],
-      'a=mid:0', 'a=sctp-port:5000', 'a=max-message-size:' + mms
-    ];
-    const base = { h: 2130706431, p: 1862270975, s: 1694498815, r: 16777215 };
-    parts.slice(5).forEach((c, i) => {
-      const [t, addr, port] = c.split(',');
-      if (!CAND_NAMES[t] || !addr || !/^\d{1,5}$/.test(port) || /\s/.test(addr)) throw new Error('Pairing data has an invalid candidate');
-      let line = 'a=candidate:' + (i + 1) + ' 1 udp ' + (base[t] - i) + ' ' + addr + ' ' + port + ' typ ' + CAND_NAMES[t];
-      if (t !== 'h') line += ' raddr 0.0.0.0 rport 0';
-      L.push(line);
-    });
-    L.push('a=end-of-candidates');
-    return L.join('\r\n') + '\r\n';
+  // ---------- retrieval link ----------
+  // Fragment: #pw1b!<sid b64url>!<key b64url>!<blob id>. The key is in the fragment, so it
+  // never reaches the server; the server only ever learns the blob id.
+  function retrieveFragment(sess, id) {
+    return PROTO + 'b!' + b64u(sess.sid) + '!' + b64u(sess.key) + '!' + id;
   }
 
-  // Offer link fragment: #pw1!<sid>!<key>!<compact offer>[!a]  (key never leaves the fragment;
-  //                     a trailing "!a" means the sender listens on the pairing relays)
-  // Answer code:          pwa1!<sid>!<compact answer>        (contains no key material)
-  function offerFragment(sess, compact, auto) {
-    return PROTO + '!' + b64u(sess.sid) + '!' + b64u(sess.key) + '!' + compact + (auto ? '!a' : '');
-  }
-
-  function parseOffer(text) {
+  function parseRetrieve(text) {
     let s = String(text || '').trim();
     const h = s.indexOf('#');
     if (h !== -1) s = s.slice(h + 1);
     try { s = decodeURIComponent(s); } catch (e) { /* keep raw */ }
     const parts = s.split('!');
-    if ((parts.length !== 4 && !(parts.length === 5 && parts[4] === 'a')) || parts[0] !== PROTO) throw new Error('This is not a Pairwise sender code');
-    const sid = unb64u(parts[1]), key = unb64u(parts[2]);
-    if (sid.length !== 16 || key.length !== 32) throw new Error('Sender code is damaged');
-    expandSdp(parts[3]); // validate
-    return { sid, key, compact: parts[3], auto: parts.length === 5 };
-  }
-
-  function answerCode(sid, compact) { return 'pwa1!' + b64u(sid) + '!' + compact; }
-
-  function parseAnswer(text) {
-    let s = String(text || '').trim();
-    try { s = decodeURIComponent(s); } catch (e) { /* keep raw */ }
-    const parts = s.split('!');
-    if (parts.length !== 3 || parts[0] !== 'pwa1') throw new Error('This is not a Pairwise answer code');
-    const sid = unb64u(parts[1]);
-    if (sid.length !== 16) throw new Error('Answer code is damaged');
-    expandSdp(parts[2]);
-    return { sid, compact: parts[2] };
+    if (parts.length !== 4 || parts[0] !== PROTO + 'b') throw new Error('This is not a Pairwise retrieval link');
+    const sid = unb64u(parts[1]), key = unb64u(parts[2]), id = parts[3];
+    if (sid.length !== 16 || key.length !== 32) throw new Error('Retrieval link is damaged');
+    if (!/^[0-9a-f]{24,64}$/.test(id)) throw new Error('Retrieval link has an invalid id');
+    return { sid, key, id };
   }
 
   global.LT = {
-    PROTO, CHUNK_BYTES, FRAME_HEADER, GCM_TAG, T_DATA, T_MANIFEST,
-    rand, b64u, unb64u, hex, concat, equalBytes,
+    PROTO, CHUNK_BYTES, FRAME_HEADER, GCM_TAG, T_DATA, T_MANIFEST, MAGIC, MAX_FRAME,
+    rand, b64u, unb64u, hex, concat, equalBytes, u32be,
     utf8Length, countLines, countUnpairedSurrogates, lineIndex,
     encodeChunkAt, prepare, finalDigest, chainStep, chunkBytesAt,
     newSession, openSession, sealFrame, openFrame, frameHeader,
-    encodeManifest, decodeManifest, authTag, authVerify,
-    sealSignal, openSignal, signalTopic, offerTag,
-    compactSdp, expandSdp, offerFragment, parseOffer, answerCode, parseAnswer
+    encodeManifest, decodeManifest,
+    blobRecord, FrameSplitter, retrieveFragment, parseRetrieve
   };
 })(typeof window !== 'undefined' ? window : globalThis);

@@ -25,82 +25,42 @@
     "detail": ""
   },
   {
-    "test": "unit chunking never splits code points (chunk 4 bytes)",
+    "test": "unit chunking never splits code points (chunk 5)",
     "pass": true,
     "detail": ""
   },
   {
-    "test": "unit chunking never splits code points (chunk 5 bytes)",
+    "test": "unit chunking never splits code points (chunk 7)",
     "pass": true,
     "detail": ""
   },
   {
-    "test": "unit chunking never splits code points (chunk 7 bytes)",
+    "test": "unit chunking never splits code points (chunk 13)",
     "pass": true,
     "detail": ""
   },
   {
-    "test": "unit chunking never splits code points (chunk 13 bytes)",
+    "test": "unit chunking never splits code points (chunk 64)",
     "pass": true,
     "detail": ""
   },
   {
-    "test": "unit chunking never splits code points (chunk 64 bytes)",
+    "test": "unit chunking never splits code points (chunk 1000)",
     "pass": true,
     "detail": ""
   },
   {
-    "test": "unit chunking never splits code points (chunk 1000 bytes)",
+    "test": "unit integrity digest changes with content",
     "pass": true,
     "detail": ""
   },
   {
-    "test": "unit integrity digest equals receiver-side hash chain",
+    "test": "unit AES-GCM frame round trip + tamper/reorder/truncation/cross-session",
     "pass": true,
     "detail": ""
   },
   {
-    "test": "unit empty text prepares to zero chunks",
-    "pass": true,
-    "detail": ""
-  },
-  {
-    "test": "unit AES-GCM frame round trip",
-    "pass": true,
-    "detail": ""
-  },
-  {
-    "test": "unit tampered ciphertext is rejected",
-    "pass": true,
-    "detail": ""
-  },
-  {
-    "test": "unit reordered chunk (index rewritten) is rejected",
-    "pass": true,
-    "detail": ""
-  },
-  {
-    "test": "unit truncation attack (different chunk count) is rejected",
-    "pass": true,
-    "detail": ""
-  },
-  {
-    "test": "unit replay into another session is rejected",
-    "pass": true,
-    "detail": ""
-  },
-  {
-    "test": "unit manifest frame type cannot be confused with data",
-    "pass": true,
-    "detail": ""
-  },
-  {
-    "test": "unit nonces unique across types and indexes",
-    "pass": true,
-    "detail": ""
-  },
-  {
-    "test": "unit key auth: HMAC challenge accepts right key, rejects wrong key",
+    "test": "unit blob FrameSplitter reassembles frames and rejects corruption",
     "pass": true,
     "detail": ""
   },
@@ -110,113 +70,93 @@
     "detail": ""
   },
   {
-    "test": "unit compact SDP survives a real offer/answer and connects",
+    "test": "unit retrieval link parse, and rejection of garbage",
     "pass": true,
     "detail": ""
   },
   {
-    "test": "unit CSP blocks HTTP requests from the page (connect-src none)",
+    "test": "e2e sender closed before receiver opens (10 MB)",
     "pass": true,
-    "detail": ""
+    "detail": "10,485,799 chars, 117,364 lines, 10.0 MiB | up+enc 0.5s, down+dec 0.3s | heap S 44 / R 33 MiB | link 128 chars, sender closed first"
   },
   {
-    "test": "unit relay messages: encrypted, session-bound, tamper-evident",
+    "test": "e2e small plain text",
     "pass": true,
-    "detail": ""
+    "detail": "50,075 chars, 588 lines, 0.0 MiB | up+enc 0.2s, down+dec 0.3s | heap S 3 / R 3 MiB | link 128 chars"
   },
   {
-    "test": "unit offer link carries the automatic-pairing flag",
+    "test": "e2e Unicode with CRLF/NUL/emoji",
     "pass": true,
-    "detail": ""
-  },
-  {
-    "test": "unit offer/answer codes: parse, size, and reject garbage",
-    "pass": true,
-    "detail": ""
-  },
-  {
-    "test": "e2e small Unicode with CRLF, NUL, emoji (pasted, ~0.3 MB)",
-    "pass": true,
-    "detail": "100,016 chars, 3,596 lines, 0.1 MiB UTF-8, big-view=True | prepare+pair 1.4s, transfer+verify 0.1s (1.5 MiB/s) | heap sender 6 MiB, receiver 5 MiB | offer QR payload 207 chars, answer 128 chars"
-  },
-  {
-    "test": "e2e small plain text (typed path)",
-    "pass": true,
-    "detail": "50,054 chars, 581 lines, 0.0 MiB UTF-8, big-view=False | prepare+pair 1.4s, transfer+verify 0.1s (0.5 MiB/s) | heap sender 5 MiB, receiver 4 MiB | offer QR payload 207 chars, answer 128 chars"
+    "detail": "200,005 chars, 9,171 lines, 0.3 MiB | up+enc 0.2s, down+dec 0.2s | heap S 5 / R 5 MiB | link 128 chars"
   },
   {
     "test": "e2e 1 MB log",
     "pass": true,
-    "detail": "1,048,601 chars, 11,839 lines, 1.0 MiB UTF-8, big-view=True | prepare+pair 1.4s, transfer+verify 0.1s (11.1 MiB/s) | heap sender 14 MiB, receiver 10 MiB | offer QR payload 207 chars, answer 128 chars"
+    "detail": "1,048,599 chars, 11,972 lines, 1.0 MiB | up+enc 0.2s, down+dec 0.2s | heap S 13 / R 11 MiB | link 128 chars"
   },
   {
     "test": "e2e 10 MB log",
     "pass": true,
-    "detail": "10,485,807 chars, 116,086 lines, 10.0 MiB UTF-8, big-view=True | prepare+pair 1.4s, transfer+verify 2.8s (3.5 MiB/s) | heap sender 56 MiB, receiver 65 MiB | offer QR payload 207 chars, answer 128 chars"
+    "detail": "10,485,799 chars, 117,364 lines, 10.0 MiB | up+enc 0.7s, down+dec 0.7s | heap S 44 / R 33 MiB | link 128 chars"
   },
   {
     "test": "e2e 25 MB log",
     "pass": true,
-    "detail": "26,214,442 chars, 287,259 lines, 25.0 MiB UTF-8, big-view=True | prepare+pair 1.6s, transfer+verify 3.3s (7.5 MiB/s) | heap sender 235 MiB, receiver 95 MiB | offer QR payload 207 chars, answer 128 chars"
+    "detail": "26,214,425 chars, 290,420 lines, 25.0 MiB | up+enc 1.5s, down+dec 0.7s | heap S 236 / R 78 MiB | link 128 chars"
   },
   {
     "test": "e2e 50 MB log",
     "pass": true,
-    "detail": "52,428,814 chars, 572,547 lines, 50.0 MiB UTF-8, big-view=True | prepare+pair 1.6s, transfer+verify 5.0s (10.0 MiB/s) | heap sender 207 MiB, receiver 169 MiB | offer QR payload 207 chars, answer 128 chars"
+    "detail": "52,428,832 chars, 578,847 lines, 50.0 MiB | up+enc 1.8s, down+dec 1.2s | heap S 256 / R 154 MiB | link 128 chars"
   },
   {
     "test": "e2e 1,000,000 lines",
     "pass": true,
-    "detail": "16,777,822 chars, 1,000,000 lines, 16.0 MiB UTF-8, big-view=True | prepare+pair 1.5s, transfer+verify 3.3s (4.8 MiB/s) | heap sender 187 MiB, receiver 72 MiB | offer QR payload 207 chars, answer 128 chars"
+    "detail": "16,777,822 chars, 1,000,000 lines, 16.0 MiB | up+enc 0.8s, down+dec 0.4s | heap S 187 / R 54 MiB | link 128 chars"
   },
   {
     "test": "e2e 2,000,000 lines",
     "pass": true,
-    "detail": "34,666,754 chars, 2,000,000 lines, 33.1 MiB UTF-8, big-view=True | prepare+pair 1.5s, transfer+verify 4.4s (7.5 MiB/s) | heap sender 144 MiB, receiver 124 MiB | offer QR payload 207 chars, answer 128 chars"
+    "detail": "34,666,754 chars, 2,000,000 lines, 33.1 MiB | up+enc 1.4s, down+dec 0.5s | heap S 176 / R 109 MiB | link 128 chars"
   },
   {
     "test": "e2e large JSON (~20 MB)",
     "pass": true,
-    "detail": "20,971,521 chars, 1,547,040 lines, 20.3 MiB UTF-8, big-view=True | prepare+pair 1.5s, transfer+verify 3.3s (6.1 MiB/s) | heap sender 234 MiB, receiver 89 MiB | offer QR payload 207 chars, answer 128 chars"
+    "detail": "20,971,559 chars, 1,548,918 lines, 20.3 MiB | up+enc 0.9s, down+dec 0.4s | heap S 233 / R 88 MiB | link 128 chars"
   },
   {
-    "test": "e2e large SQL script (~15 MB)",
+    "test": "e2e large SQL (~15 MB)",
     "pass": true,
-    "detail": "15,728,692 chars, 133,176 lines, 15.0 MiB UTF-8, big-view=True | prepare+pair 1.4s, transfer+verify 3.3s (4.5 MiB/s) | heap sender 81 MiB, receiver 63 MiB | offer QR payload 207 chars, answer 128 chars"
+    "detail": "15,728,659 chars, 151,915 lines, 15.0 MiB | up+enc 0.6s, down+dec 0.3s | heap S 79 / R 48 MiB | link 128 chars"
   },
   {
     "test": "e2e multilingual Unicode (~7 MB)",
     "pass": true,
-    "detail": "5,242,882 chars, 177,726 lines, 7.4 MiB UTF-8, big-view=True | prepare+pair 1.5s, transfer+verify 2.8s (2.6 MiB/s) | heap sender 26 MiB, receiver 50 MiB | offer QR payload 207 chars, answer 128 chars"
+    "detail": "3,670,015 chars, 158,017 lines, 5.0 MiB | up+enc 0.3s, down+dec 0.2s | heap S 39 / R 42 MiB | link 128 chars"
   },
   {
-    "test": "QR link flow: key never reaches the server, removed from address bar",
+    "test": "once=1 deletes after first download",
     "pass": true,
-    "detail": "server saw key=False, address bar clean=True, server request lines: ['GET /index.html?test=1&relay=ws%3A%2F%2F127.0.0.1%3A38983 HTTP/1.1']"
+    "detail": "first matched=True, second as expected=True"
   },
   {
-    "test": "manual pairing with relays off",
+    "test": "once=0 allows a second open",
     "pass": true,
-    "detail": "link has auto flag=False, relay messages=0"
+    "detail": "first matched=True, second as expected=True"
   },
   {
-    "test": "save as file keeps the chosen name and exact bytes",
+    "test": "delete now removes the blob from the server",
     "pass": true,
-    "detail": "[('received-dump', True), ('notes.md', True)]"
+    "detail": "receiver saw: This transfer no longer exists. It may have expired or already been opened."
   },
   {
-    "test": "relay sees only small encrypted messages on derived topics",
+    "test": "server request log never contains key material",
     "pass": true,
-    "detail": "13 relay messages, sizes [187] bytes"
+    "detail": "115 API requests logged; sample paths: /, /api/blob, /api/blob/0ce51d960e882f273de5ab7cb6f7bc64, /api/blob/0ce51d960e882f273de5ab7cb6f7bc64/meta, /api/blob/27a0958e2f45c1d406c45153ab558381"
   },
   {
-    "test": "resume after dropped connection",
+    "test": "server rejects oversize upload (413) but accepts small",
     "pass": true,
-    "detail": "dropped at chunk 152; sender log shows resume=True"
-  },
-  {
-    "test": "manual session end discards session",
-    "pass": true,
-    "detail": "UI cleared=True, editor unlocked=True, stale code opened no channel=True"
+    "detail": "oversize status=413, small id=True"
   }
 ]
