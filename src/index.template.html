@@ -1,0 +1,296 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta http-equiv="Content-Security-Policy" content="__CSP__">
+<meta name="referrer" content="no-referrer">
+<meta name="description" content="Pairwise sends large text from one browser to another over a direct WebRTC connection. Text is encrypted with AES-256-GCM in the sending browser; the key travels only inside the QR code. Optional STUN or TURN servers are used only for connection setup or relaying when configured.">
+<title>Pairwise Text Transfer</title>
+<style>
+/* Layout: one working column; the editor and transfer panels are the page. Utility type throughout. */
+:root {
+  --bg: #eef1f4; --surface: #ffffff; --sunk: #f6f8fa; --ink: #15202b; --muted: #556270;
+  --line: #d3dae1; --accent: #1d5bbd; --accent-ink: #ffffff; --accent-soft: #e3ecfa;
+  --ok: #17784a; --ok-soft: #e2f3ea; --warn: #8f5d00; --warn-soft: #fbf0d9; --bad: #b3261e; --bad-soft: #fbe5e3;
+  --font-ui: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", "Roboto Mono", Menlo, Consolas, monospace;
+  --lh: 18px; --radius: 6px;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0e1318; --surface: #151c23; --sunk: #10161c; --ink: #e2e8ee; --muted: #93a0ad;
+    --line: #29333d; --accent: #6b9cf5; --accent-ink: #0b1220; --accent-soft: #1a2a44;
+    --ok: #4cc38a; --ok-soft: #13291f; --warn: #e3a63c; --warn-soft: #2d2412; --bad: #f2756a; --bad-soft: #351816;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0e1318; --surface: #151c23; --sunk: #10161c; --ink: #e2e8ee; --muted: #93a0ad;
+  --line: #29333d; --accent: #6b9cf5; --accent-ink: #0b1220; --accent-soft: #1a2a44;
+  --ok: #4cc38a; --ok-soft: #13291f; --warn: #e3a63c; --warn-soft: #2d2412; --bad: #f2756a; --bad-soft: #351816;
+  color-scheme: dark;
+}
+*, *::before, *::after { box-sizing: border-box; }
+html { padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.5 var(--font-ui); }
+[hidden] { display: none !important; }
+.wrap { max-width: 1040px; margin: 0 auto; padding-block: 20px 48px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); display: grid; gap: 16px; }
+header.top { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 20px; }
+.brand { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+.brand h1 { margin: 0; font-size: 20px; letter-spacing: -0.01em; }
+.brand span { color: var(--muted); font-size: 13px; }
+.tabs { margin-left: auto; display: inline-flex; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; background: var(--surface); }
+.tabs button { border: 0; background: transparent; color: var(--muted); padding: 7px 16px; font: inherit; cursor: pointer; }
+.tabs button[aria-selected="true"] { background: var(--accent); color: var(--accent-ink); }
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; display: grid; gap: 12px; min-width: 0; }
+.panel h2 { margin: 0; font-size: 15px; text-wrap: balance; }
+.row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.spacer { flex: 1; }
+.muted { color: var(--muted); }
+.small { font-size: 12.5px; }
+.mono { font-family: var(--font-mono); }
+button.btn, label.btn { font: inherit; border: 1px solid var(--line); background: var(--surface); color: var(--ink); border-radius: var(--radius); padding: 7px 12px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
+button.btn:hover, label.btn:hover { border-color: var(--muted); }
+button.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
+button.btn.danger { color: var(--bad); }
+button.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.stats { display: flex; flex-wrap: wrap; gap: 4px 18px; font-variant-numeric: tabular-nums; font-size: 12.5px; color: var(--muted); }
+.stats b { color: var(--ink); font-weight: 600; }
+textarea, input[type="text"], select { font: inherit; color: var(--ink); background: var(--sunk); border: 1px solid var(--line); border-radius: var(--radius); padding: 8px 10px; min-width: 0; }
+textarea { font-family: var(--font-mono); font-size: 12.5px; line-height: var(--lh); resize: vertical; width: 100%; }
+#input { height: 46vh; min-height: 240px; white-space: pre; overflow-wrap: normal; overflow: auto; tab-size: 4; }
+.vv { height: 46vh; min-height: 240px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--sunk); position: relative; overflow: hidden; }
+.vv-scroll { position: absolute; inset: 0; overflow: auto; outline: none; }
+.vv-spacer { width: 1px; }
+.vv-rows { position: absolute; top: 0; left: 0; min-width: 100%; font: 12.5px/var(--lh) var(--font-mono); tab-size: 4; will-change: transform; }
+.vv-row { display: flex; height: var(--lh); white-space: pre; }
+.vv-num { position: sticky; left: 0; flex: none; min-width: 7ch; padding: 0 10px 0 8px; text-align: right; color: var(--muted); background: var(--sunk); border-right: 1px solid var(--line); user-select: none; font-variant-numeric: tabular-nums; }
+.vv-txt { padding: 0 12px; }
+.vv-more { color: var(--warn); font-style: italic; }
+.vv-note { font-size: 12px; color: var(--muted); }
+.notice { border-radius: var(--radius); padding: 10px 12px; font-size: 13px; }
+.notice.warn { background: var(--warn-soft); color: var(--warn); }
+.notice.bad { background: var(--bad-soft); color: var(--bad); }
+.notice.ok { background: var(--ok-soft); color: var(--ok); }
+.notice.info { background: var(--accent-soft); color: var(--ink); }
+.opts { display: grid; gap: 10px; }
+.opts label { display: flex; gap: 8px; align-items: flex-start; }
+.opts input[type="checkbox"] { margin-top: 3px; }
+details > summary { cursor: pointer; color: var(--muted); }
+.turn { display: grid; gap: 8px; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); margin-top: 8px; }
+.pair { display: grid; grid-template-columns: minmax(0, 340px) minmax(0, 1fr); gap: 20px; align-items: start; }
+@media (max-width: 720px) { .pair { grid-template-columns: minmax(0, 1fr); } }
+.qrbox { background: #ffffff; border-radius: var(--radius); padding: 10px; border: 1px solid var(--line); justify-self: center; width: 100%; max-width: 340px; }
+.qrbox canvas { display: block; width: 100%; height: auto; image-rendering: pixelated; }
+.steps { display: grid; gap: 14px; min-width: 0; }
+.step { display: grid; gap: 6px; min-width: 0; }
+.step h3 { margin: 0; font-size: 13.5px; }
+.step .num { display: inline-block; min-width: 1.6em; color: var(--accent); font-variant-numeric: tabular-nums; }
+.copyline { display: flex; gap: 8px; min-width: 0; }
+.copyline input { flex: 1; font-family: var(--font-mono); font-size: 12px; }
+.chip { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; border-radius: 999px; padding: 2px 10px; border: 1px solid var(--line); background: var(--sunk); color: var(--muted); font-variant-numeric: tabular-nums; }
+.chip.ok { color: var(--ok); border-color: currentColor; }
+.chip.warn { color: var(--warn); border-color: currentColor; }
+.chip.bad { color: var(--bad); border-color: currentColor; }
+.chip.live { color: var(--accent); border-color: currentColor; }
+.bar { height: 8px; border-radius: 4px; background: var(--sunk); border: 1px solid var(--line); overflow: hidden; position: relative; }
+.bar > i { position: absolute; inset: 0 auto 0 0; width: 0; background: var(--accent); transition: width 120ms linear; }
+.bar > i.ghost { background: var(--accent-soft); }
+.digest { font-family: var(--font-mono); font-size: 13px; letter-spacing: 0.04em; word-break: break-all; }
+.log { font: 12px/1.55 var(--font-mono); color: var(--muted); max-height: 150px; overflow: auto; margin: 0; padding: 0; list-style: none; }
+.log li::before { content: attr(data-t) "  "; opacity: 0.7; }
+.kv { display: grid; grid-template-columns: max-content 1fr; gap: 4px 14px; font-size: 13px; }
+.kv dt { color: var(--muted); }
+.kv dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+dialog { border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); color: var(--ink); padding: 14px; width: min(520px, calc(100vw - 32px)); }
+dialog::backdrop { background: rgba(0, 0, 0, 0.55); }
+dialog video { width: 100%; border-radius: var(--radius); background: #000; display: block; aspect-ratio: 4 / 3; object-fit: cover; }
+.netinfo ul { margin: 6px 0 0; padding-left: 18px; display: grid; gap: 4px; }
+.toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(20px + env(safe-area-inset-bottom, 0px)); background: var(--ink); color: var(--bg); padding: 8px 14px; border-radius: var(--radius); font-size: 13px; z-index: 50; max-width: calc(100vw - 32px); }
+@media (prefers-reduced-motion: reduce) { .bar > i { transition: none; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div class="brand"><h1>Pairwise</h1></div>
+    <div class="tabs" role="tablist" aria-label="Mode">
+      <button id="tab-send" role="tab" aria-selected="true" aria-controls="view-send">Send</button>
+      <button id="tab-recv" role="tab" aria-selected="false" aria-controls="view-recv">Receive</button>
+    </div>
+  </header>
+
+  <div id="env-warning" class="notice bad" hidden></div>
+
+  <!-- ============================ SEND ============================ -->
+  <main id="view-send" role="tabpanel" aria-labelledby="tab-send" style="display:grid;gap:16px">
+    <section class="panel" id="compose">
+      <div class="row">
+        <span class="spacer"></span>
+        <button class="btn" id="btn-paste" type="button">Paste from clipboard</button>
+        <label class="btn" for="file-input">Open .txt file</label>
+        <input id="file-input" type="file" accept="text/*,.txt,.log,.json,.sql,.xml,.csv,.md" hidden>
+        <button class="btn" id="btn-clear" type="button">Clear</button>
+      </div>
+      <textarea id="input" spellcheck="false" autocomplete="off" autocapitalize="off" wrap="off" aria-label="Text to send" placeholder="Paste here with Ctrl+V or ⌘V. Pastes over 1,000,000 characters, or with Windows (CRLF) line endings, open in an exact read-only view so nothing is altered or truncated."></textarea>
+      <div id="bigview-wrap" hidden>
+        <div class="vv" id="bigview"></div>
+        <div class="row vv-note"><span>Shown read-only so every character and line ending is kept exactly. Lines longer than 2,000 characters are shortened on screen only; the transfer always includes everything. Use Clear to start over.</span></div>
+      </div>
+      <div class="stats" id="send-stats" aria-live="polite">
+        <span><b id="st-chars">0</b> characters</span>
+        <span><b id="st-lines">0</b> lines</span>
+        <span><b id="st-bytes">0 B</b> UTF-8</span>
+        <span><b id="st-wire">0 B</b> encrypted, in <b id="st-chunks">0</b> × 48 KiB frames</span>
+      </div>
+      <div id="surrogate-warning" class="notice warn" hidden></div>
+      <div class="opts">
+        <div class="row">
+          <label for="ttl" class="muted small">Session expires after</label>
+          <select id="ttl">
+            <option value="5">5 minutes</option>
+            <option value="15" selected>15 minutes</option>
+            <option value="30">30 minutes</option>
+            <option value="60">60 minutes</option>
+          </select>
+        </div>
+        <label class="small"><input type="checkbox" id="use-stun" checked>
+          <span>Use the public STUN server <span class="mono">stun.l.google.com:19302</span> so devices on different networks can find each other. It learns your public IP address and nothing else. Turn off when both devices share a local network.</span></label>
+        <details>
+          <summary class="small">TURN relay (optional, for networks that block direct connections)</summary>
+          <div class="turn">
+            <input type="text" id="turn-url" placeholder="turn:turn.example.com:3478" aria-label="TURN URL" autocomplete="off">
+            <input type="text" id="turn-user" placeholder="Username" aria-label="TURN username" autocomplete="off">
+            <input type="text" id="turn-pass" placeholder="Credential" aria-label="TURN credential" autocomplete="off">
+          </div>
+          <p class="small muted" style="margin:8px 0 0">A TURN server relays the encrypted stream when no direct path exists. It sees both IP addresses and the size and timing of the traffic, never the text or the key. Both devices need the same TURN settings.</p>
+        </details>
+      </div>
+      <div class="row">
+        <button class="btn primary" id="btn-prepare" type="button" disabled>Encrypt and pair</button>
+        <span class="small muted" id="prepare-status"></span>
+      </div>
+    </section>
+
+    <section class="panel" id="send-pair" hidden>
+      <div class="row">
+        <h2>Pair the receiving device</h2>
+        <span class="spacer"></span>
+        <span class="chip" id="send-expiry">--:--</span>
+        <button class="btn danger" id="btn-send-end" type="button">End session</button>
+      </div>
+      <div class="pair">
+        <div class="qrbox"><canvas id="send-qr" width="320" height="320" aria-label="Pairing QR code"></canvas></div>
+        <div class="steps">
+          <div class="step">
+            <h3><span class="num">1</span>Scan this code with the other device</h3>
+            <p class="small muted" style="margin:0">Its camera app opens this page in Receive mode. The code carries the decryption key in the part of the link after <span class="mono">#</span>, which browsers do not send to the web server. Anyone who sees this code can decrypt the text, so keep it private.</p>
+            <div class="copyline"><input type="text" id="send-link" readonly aria-label="Recipient link"><button class="btn" id="btn-copy-link" type="button">Copy link</button></div>
+          </div>
+          <div class="step">
+            <h3><span class="num">2</span>Bring back the answer from the other device</h3>
+            <p class="small muted" style="margin:0">The receiving device shows an answer QR. Scan it here, or paste its answer code. The answer contains connection details only.</p>
+            <div class="row"><button class="btn" id="btn-scan-answer" type="button">Scan answer with camera</button></div>
+            <textarea id="answer-input" rows="3" spellcheck="false" placeholder="pwa1!…" aria-label="Answer code"></textarea>
+            <div class="row"><button class="btn primary" id="btn-connect" type="button">Connect</button><span class="small" id="answer-error" role="alert"></span></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel" id="send-progress" hidden>
+      <div class="row"><h2>Transfer</h2><span class="spacer"></span><span class="chip" id="send-state">waiting</span></div>
+      <div class="bar" aria-hidden="true"><i class="ghost" id="send-bar-sent"></i><i id="send-bar-ack"></i></div>
+      <div class="stats"><span>Sent <b id="sp-sent">0</b></span><span>Confirmed by recipient <b id="sp-ack">0</b></span><span><b id="sp-rate">–</b></span></div>
+      <dl class="kv">
+        <dt>Integrity digest</dt><dd class="digest" id="send-digest">–</dd>
+      </dl>
+      <div id="send-result" class="notice" hidden></div>
+      <div class="row" id="send-resume" hidden>
+        <button class="btn primary" id="btn-new-code" type="button">Create new pairing code</button>
+        <span class="small muted">The connection dropped. A new code reconnects the same session and resumes where it stopped.</span>
+      </div>
+    </section>
+  </main>
+
+  <!-- ============================ RECEIVE ============================ -->
+  <main id="view-recv" role="tabpanel" aria-labelledby="tab-recv" hidden style="display:grid;gap:16px">
+    <section class="panel" id="recv-connect">
+      <h2>Receive text</h2>
+      <p class="small muted" style="margin:0">Scan the code shown on the sending device. If you opened this page from that code, pairing starts on its own.</p>
+      <div class="row"><button class="btn primary" id="btn-scan-offer" type="button">Scan sender's code</button></div>
+      <div class="copyline"><input type="text" id="offer-input" placeholder="…or paste the sender's link" aria-label="Sender link" autocomplete="off"><button class="btn" id="btn-offer-go" type="button">Pair</button></div>
+      <span class="small" id="offer-error" role="alert"></span>
+    </section>
+
+    <section class="panel" id="recv-answer" hidden>
+      <div class="row"><h2>Show this answer to the sender</h2><span class="spacer"></span><span class="chip live" id="recv-state">waiting for sender</span></div>
+      <div class="pair">
+        <div class="qrbox"><canvas id="recv-qr" width="320" height="320" aria-label="Answer QR code"></canvas></div>
+        <div class="steps">
+          <p class="small muted" style="margin:0">On the sending device, choose <b>Scan answer with camera</b> and point it at this code. Or copy the answer code and paste it there. It holds connection details only, not the key.</p>
+          <div class="copyline"><input type="text" id="answer-out" readonly aria-label="Answer code"><button class="btn" id="btn-copy-answer" type="button">Copy answer</button></div>
+          <button class="btn danger" id="btn-recv-cancel" type="button" style="justify-self:start">Cancel</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel" id="recv-progress" hidden>
+      <div class="row"><h2>Receiving</h2><span class="spacer"></span><span class="chip" id="recv-expiry">--:--</span></div>
+      <div class="bar" aria-hidden="true"><i id="recv-bar"></i></div>
+      <div class="stats"><span><b id="rp-bytes">0 B</b> of <b id="rp-total">?</b></span><span>Chunk <b id="rp-chunk">0</b> of <b id="rp-count">?</b></span><span><b id="rp-rate">–</b></span></div>
+      <div id="recv-issue" class="notice warn" hidden></div>
+    </section>
+
+    <section class="panel" id="recv-result" hidden>
+      <div class="row">
+        <h2>Received text</h2>
+        <span class="spacer"></span>
+        <button class="btn primary" id="btn-copy-all" type="button">Copy all</button>
+        <button class="btn" id="btn-download" type="button">Download .txt</button>
+        <button class="btn danger" id="btn-recv-clear" type="button">Clear</button>
+      </div>
+      <div class="notice ok" id="recv-verified"></div>
+      <div class="stats"><span><b id="rr-chars">0</b> characters</span><span><b id="rr-lines">0</b> lines</span><span><b id="rr-bytes">0 B</b> UTF-8</span></div>
+      <div class="vv" id="recvview"></div>
+      <div class="vv-note">Lines longer than 2,000 characters are shortened on screen only. Copy and download include the complete text.</div>
+    </section>
+  </main>
+
+  <section class="panel">
+    <div class="row"><h2>Activity</h2><span class="spacer"></span><span class="small muted">Everything this page does on the network is listed here.</span></div>
+    <ul class="log" id="log" aria-live="polite"></ul>
+  </section>
+
+  <details class="panel netinfo">
+    <summary><b>What this page sends over the network</b></summary>
+    <ul class="small">
+      <li>The page itself makes no HTTP requests after it loads. Its Content Security Policy sets <span class="mono">connect-src 'none'</span>, so it cannot upload anything to a web server.</li>
+      <li>Pairing data (connection offer and answer) moves only through the QR codes or links you copy yourself. There is no signaling server.</li>
+      <li>If STUN is on, each browser sends a small request to <span class="mono">stun.l.google.com:19302</span> to learn its public IP address.</li>
+      <li>The text travels directly between the two browsers over a WebRTC data channel. WebRTC encrypts the channel with DTLS, and each 48 KiB chunk is additionally sealed with AES-256-GCM using a key that exists only in the QR code.</li>
+      <li>If you configure TURN, the encrypted stream may pass through that relay. It cannot read it.</li>
+      <li>Both devices' IP addresses are visible to each other, as with any direct connection.</li>
+    </ul>
+  </details>
+</div>
+
+<dialog id="scan-dialog" aria-labelledby="scan-title">
+  <div style="display:grid;gap:10px">
+    <div class="row"><b id="scan-title">Point the camera at the QR code</b><span class="spacer"></span><button class="btn" id="btn-scan-close" type="button">Cancel</button></div>
+    <video id="scan-video" playsinline muted></video>
+    <canvas id="scan-canvas" hidden></canvas>
+    <span class="small muted" id="scan-status">Starting camera…</span>
+  </div>
+</dialog>
+
+<script>__QRGEN__</script>
+<script>__JSQR__</script>
+<script>__CORE__</script>
+<script>__SESSION__</script>
+<script>__UI__</script>
+</body>
+</html>

@@ -1,0 +1,157 @@
+[
+  {
+    "test": "page loads without console errors or CSP violations",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "test": "unit base64url round trip (all lengths 0..64)",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "test": "unit utf8Length matches TextEncoder",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "test": "unit countLines / lineIndex",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "test": "unit unpaired surrogate detection",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "test": "unit chunking never splits code points (chunk 4 bytes)",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "test": "unit chunking never splits code points (chunk 5 bytes)",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "test": "unit chunking never splits code points (chunk 7 bytes)",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "test": "unit chunking never splits code points (chunk 13 bytes)",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "test": "unit chunking never splits code points (chunk 64 bytes)",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "test": "unit chunking never splits code points (chunk 1000 bytes)",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "test": "unit integrity digest equals receiver-side hash chain",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "test": "unit empty text prepares to zero chunks",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "test": "unit AES-GCM frame round trip",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "test": "unit tampered ciphertext is rejected",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "test": "unit reordered chunk (index rewritten) is rejected",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "test": "unit truncation attack (different chunk count) is rejected",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "test": "unit replay into another session is rejected",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "test": "unit manifest frame type cannot be confused with data",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "test": "unit nonces unique across types and indexes",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "test": "unit key auth: HMAC challenge accepts right key, rejects wrong key",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "test": "unit manifest encode/decode and validation",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "test": "unit compact SDP survives a real offer/answer and connects",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "test": "unit CSP blocks HTTP requests from the page (connect-src none)",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "test": "unit offer/answer codes: parse, size, and reject garbage",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "test": "e2e small Unicode with CRLF, NUL, emoji (pasted, ~0.3 MB)",
+    "pass": true,
+    "detail": "100,016 chars, 3,596 lines, 0.1 MiB UTF-8, big-view=True | prepare+pair 1.8s, transfer+verify 0.1s (1.5 MiB/s) | heap sender 5 MiB, receiver 5 MiB | offer QR payload 205 chars, answer 128 chars"
+  },
+  {
+    "test": "e2e small plain text (typed path)",
+    "pass": true,
+    "detail": "50,054 chars, 581 lines, 0.0 MiB UTF-8, big-view=False | prepare+pair 1.8s, transfer+verify 0.1s (0.9 MiB/s) | heap sender 5 MiB, receiver 4 MiB | offer QR payload 205 chars, answer 128 chars"
+  },
+  {
+    "test": "e2e 1 MB log",
+    "pass": true,
+    "detail": "1,048,601 chars, 11,839 lines, 1.0 MiB UTF-8, big-view=True | prepare+pair 1.4s, transfer+verify 0.1s (11.0 MiB/s) | heap sender 15 MiB, receiver 10 MiB | offer QR payload 205 chars, answer 128 chars"
+  },
+  {
+    "test": "QR link flow: key never reaches the server, removed from address bar",
+    "pass": true,
+    "detail": "server saw key=False, address bar clean=True, server request lines: ['GET /index.html?test=1 HTTP/1.1']"
+  },
+  {
+    "test": "resume after dropped connection",
+    "pass": true,
+    "detail": "dropped at chunk 152; sender log shows resume=True"
+  },
+  {
+    "test": "manual session end discards session",
+    "pass": true,
+    "detail": "UI cleared=True, editor unlocked=True, stale code opened no channel=True"
+  }
+]
