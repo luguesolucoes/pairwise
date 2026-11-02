@@ -1,4 +1,6 @@
 node_modules/
 dist/
+data/
 out/
 tests/full-*.log
+*.tmp

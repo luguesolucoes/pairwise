@@ -1,19 +1,17 @@
 {
   "name": "pairwise",
   "version": "1.0.0",
-  "description": "End-to-end encrypted large-text transfer between two browsers over WebRTC, paired with QR codes",
+  "description": "Encrypted large-text transfer: browser encrypts, a small Node server stores the ciphertext, another device scans a QR to download and decrypt",
   "scripts": {
     "build": "node build.mjs",
+    "start": "node server/server.mjs",
     "test": "python3 tests/test_pairwise.py"
   },
-  "dependencies": {
-    "jsqr": "^1.4.0",
-    "qrcode-generator": "^1.4.4"
-  },
+  "private": true,
   "devDependencies": {
-    "aedes": "^0.51.3",
-    "terser": "^5.31.6",
-    "ws": "^8.18.0"
+    "terser": "^5.31.6"
   },
-  "private": true
+  "dependencies": {
+    "qrcode-generator": "^1.4.4"
+  }
 }

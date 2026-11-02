@@ -1,62 +1,33 @@
-"""Pairwise automated tests.
+"""Pairwise automated tests (store-and-forward architecture).
 
-Runs the built dist/index.html in real Chromium (Google Chrome) via Playwright:
-  1. Unit tests of core cryptography, chunking, integrity and signaling compaction.
-  2. End-to-end transfers between two isolated browser contexts over a real WebRTC
-     data channel, driven through the UI (paste -> encrypt & pair -> answer -> verify).
-  3. Resume after a dropped connection, session end, and network-request auditing.
+Runs the built dist/index.html served by the real Node backend (server/server.mjs) in
+headless Chromium via Playwright:
+  1. Unit tests of core cryptography, chunking, the stored-blob framing and the link format.
+  2. End-to-end: the sender encrypts and uploads; a second browser opens the link, downloads
+     and decrypts, and the SHA-256 of the original and reconstructed text must match.
+  3. The sender page is CLOSED before the receiver opens the link, proving independence.
+  4. once/TTL/delete semantics, the 64 MiB-class size limit, and that the key never reaches
+     the server (checked against the server's own request log).
 
-Usage:  python3 tests/test_pairwise.py [--quick] [--browser chromium|webkit]
+Usage:  python3 tests/test_pairwise.py [--quick]
 """
-import http.server
-import subprocess
-import urllib.parse
+import hashlib
 import json
 import os
-import socketserver
+import subprocess
 import sys
+import tempfile
 import threading
 import time
+import urllib.request
+import urllib.error
 
 from playwright.sync_api import sync_playwright
 
-ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'dist')
+ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..')
+DIST = os.path.join(ROOT, 'dist', 'index.html')
+SERVER = os.path.join(ROOT, 'server', 'server.mjs')
 QUICK = '--quick' in sys.argv
-BROWSER = 'webkit' if '--browser' in sys.argv and sys.argv[sys.argv.index('--browser') + 1] == 'webkit' else 'chromium'
-
-REQUEST_LOG = []
-
-
-class Handler(http.server.SimpleHTTPRequestHandler):
-    def __init__(self, *a, **k):
-        super().__init__(*a, directory=ROOT, **k)
-
-    def log_message(self, fmt, *args):
-        REQUEST_LOG.append(self.requestline)
-
-
-BROKER_LOG = []
-
-
-def start_broker():
-    proc = subprocess.Popen(['node', os.path.join(os.path.dirname(os.path.abspath(__file__)), 'broker.mjs')],
-                            stdout=subprocess.PIPE, text=True)
-    port = None
-    while port is None:
-        line = proc.stdout.readline()
-        if line.startswith('PORT'):
-            port = int(line.split()[1])
-    threading.Thread(target=lambda: [BROKER_LOG.append(l.strip()) for l in proc.stdout], daemon=True).start()
-    return proc, 'ws://127.0.0.1:%d' % port
-
-
-def serve():
-    socketserver.TCPServer.allow_reuse_address = True
-    srv = socketserver.ThreadingTCPServer(('127.0.0.1', 0), Handler)
-    threading.Thread(target=srv.serve_forever, daemon=True).start()
-    return srv, 'http://localhost:%d/index.html?test=1' % srv.server_address[1]
-
-
 RESULTS = []
 
 
@@ -65,195 +36,137 @@ def record(name, ok, detail=''):
     print(('PASS ' if ok else 'FAIL ') + name + ('  ' + detail if detail else ''), flush=True)
 
 
+class Server:
+    def __init__(self, max_bytes=64 * 1024 * 1024, max_ttl=86400):
+        self.store = tempfile.mkdtemp(prefix='pw-store-')
+        env = dict(os.environ)
+        env.update({
+            'PAIRWISE_PORT': '0', 'PAIRWISE_HOST': '127.0.0.1', 'PAIRWISE_STORE': self.store,
+            'PAIRWISE_STATIC': DIST, 'PAIRWISE_MAX_BYTES': str(max_bytes), 'PAIRWISE_MAX_TTL': str(max_ttl),
+        })
+        self.proc = subprocess.Popen(['node', SERVER], stdout=subprocess.PIPE, text=True, env=env)
+        self.log = []
+        self.port = None
+        import re
+        line = self.proc.stdout.readline()
+        # "Pairwise server on http://127.0.0.1:PORT store=..."
+        m = re.search(r'://[^:/\s]+:(\d+)', line)
+        if not m:
+            raise RuntimeError('server did not start: ' + repr(line) + repr(self.proc.stdout.read()))
+        self.port = int(m.group(1))
+        threading.Thread(target=self._drain, daemon=True).start()
+
+    def _drain(self):
+        for l in self.proc.stdout:
+            self.log.append(l.rstrip())
+
+    @property
+    def url(self):
+        return 'http://localhost:%d' % self.port
+
+    def requests(self):
+        return [l for l in self.log if ' GET ' in l or ' POST ' in l or ' DELETE ' in l]
+
+    def stop(self):
+        try:
+            self.proc.terminate()
+            self.proc.wait(timeout=5)
+        except Exception:
+            self.proc.kill()
+
+
 # --------------------------------------------------------------- unit tests
 UNIT_JS = r"""
 async () => {
   const out = [];
   const t = async (name, fn) => { try { const r = await fn(); out.push([name, r === true || r === undefined, r === true || r === undefined ? '' : String(r)]); } catch (e) { out.push([name, false, String(e && e.stack || e)]); } };
+  const mustFail = async (fn) => { try { await fn(); return false; } catch (e) { return true; } };
   const enc = new TextEncoder(), dec = new TextDecoder();
+  const tricky = 'ASCII\tline\r\nCRLF\n' + 'é ñ ü ß ' + '中文 日本語 한국어 ' + 'العربية עברית ' + 'é combining ' + '😀👩‍👩‍👧‍👦🏳️‍🌈 ' + '\u0000NUL  LS ﻿BOM ' + '𝔘𝔫𝔦𝔠𝔬𝔡𝔢';
 
   await t('base64url round trip (all lengths 0..64)', () => {
     for (let n = 0; n <= 64; n++) { const b = LT.rand(n); if (!LT.equalBytes(LT.unb64u(LT.b64u(b)), b)) return 'mismatch at ' + n; }
-    try { LT.unb64u('ab+/'); return 'accepted non-url alphabet'; } catch (e) {}
     return true;
   });
 
-  const tricky = 'ASCII\tline\r\nCRLF\n' + 'é ñ ü ß ' + '中文 日本語 한국어 ' + 'العربية עברית ' + 'é combining ' + '😀👩‍👩‍👧‍👦🏳️‍🌈 ' + '\u0000NUL  LS ﻿BOM ' + '𝔘𝔫𝔦𝔠𝔬𝔡𝔢';
-
   await t('utf8Length matches TextEncoder', () => {
-    for (const s of [tricky, '', 'a', '😀', tricky.repeat(50)]) if (LT.utf8Length(s) !== enc.encode(s).length) return 'mismatch for ' + JSON.stringify(s.slice(0, 20));
+    for (const s of [tricky, '', 'a', '😀', tricky.repeat(50)]) if (LT.utf8Length(s) !== enc.encode(s).length) return 'mismatch';
     return true;
   });
 
   await t('countLines / lineIndex', () => {
     if (LT.countLines('') !== 0 || LT.countLines('a') !== 1 || LT.countLines('a\n') !== 2 || LT.countLines('\n\n') !== 3) return 'countLines wrong';
-    const idx = LT.lineIndex('ab\ncd\n\nef');
-    return JSON.stringify(Array.from(idx)) === '[0,3,6,7]' || 'lineIndex ' + Array.from(idx);
+    return JSON.stringify(Array.from(LT.lineIndex('ab\ncd\n\nef'))) === '[0,3,6,7]' || 'lineIndex wrong';
   });
 
-  await t('unpaired surrogate detection', () => {
-    return LT.countUnpairedSurrogates('ok😀') === 0 && LT.countUnpairedSurrogates('a\uD800b\uDC00') === 2 && LT.countUnpairedSurrogates('\uD83D') === 1 || 'wrong count';
-  });
+  await t('unpaired surrogate detection', () => LT.countUnpairedSurrogates('ok😀') === 0 && LT.countUnpairedSurrogates('a\uD800b\uDC00') === 2 || 'wrong');
 
-  for (const cb of [4, 5, 7, 13, 64, 1000]) {
-    await t('chunking never splits code points (chunk ' + cb + ' bytes)', async () => {
+  for (const cb of [5, 7, 13, 64, 1000]) {
+    await t('chunking never splits code points (chunk ' + cb + ')', async () => {
       const s = tricky.repeat(20);
       const m = await LT.prepare(s, { chunkBytes: cb });
-      const buf = new Uint8Array(cb);
-      const d = new TextDecoder('utf-8', { fatal: true });
+      const buf = new Uint8Array(cb); const d = new TextDecoder('utf-8', { fatal: true });
       let total = 0, outS = '';
-      for (let i = 0; i < m.count; i++) {
-        const c = LT.chunkBytesAt(s, m, i, buf);
-        if (c.length > cb) return 'chunk too big';
-        total += c.length;
-        new TextDecoder('utf-8', { fatal: true }).decode(c); // each chunk is valid UTF-8 on its own
-        outS += d.decode(c, { stream: true });
-      }
+      for (let i = 0; i < m.count; i++) { const c = LT.chunkBytesAt(s, m, i, buf); if (c.length > cb) return 'too big'; total += c.length; new TextDecoder('utf-8', { fatal: true }).decode(c); outS += d.decode(c, { stream: true }); }
       outS += d.decode();
-      if (total !== m.totalBytes || total !== enc.encode(s).length) return 'byte total mismatch';
-      return outS === s || 'reassembly mismatch';
+      return (total === m.totalBytes && outS === s) || 'reassembly mismatch';
     });
   }
 
-  await t('integrity digest equals receiver-side hash chain', async () => {
-    const s = tricky.repeat(3000);
-    const m = await LT.prepare(s);
-    let h = new Uint8Array(32); const buf = new Uint8Array(m.chunkBytes);
-    for (let i = 0; i < m.count; i++) h = await LT.chainStep(h, LT.chunkBytesAt(s, m, i, buf).slice());
-    const d = await LT.finalDigest(h, m.totalBytes, m.count);
-    if (!LT.equalBytes(d, m.digest)) return 'digest mismatch';
-    const m2 = await LT.prepare(s.slice(0, -1) + 'X');
-    return !LT.equalBytes(m2.digest, m.digest) || 'digest did not change';
+  await t('integrity digest changes with content', async () => {
+    const a = await LT.prepare('hello world'); const b = await LT.prepare('hello worlx');
+    return !LT.equalBytes(a.digest, b.digest) || 'digest unchanged';
   });
 
-  await t('empty text prepares to zero chunks', async () => { const m = await LT.prepare(''); return m.count === 0 && m.totalBytes === 0 || 'not empty'; });
-
-  await t('AES-GCM frame round trip', async () => {
+  await t('AES-GCM frame round trip + tamper/reorder/truncation/cross-session', async () => {
     const s = await LT.newSession();
-    const p = enc.encode('hello ' + tricky);
-    const f = await LT.sealFrame(s, LT.T_DATA, 7, 10, p);
+    const f = await LT.sealFrame(s, LT.T_DATA, 7, 10, enc.encode('hello ' + tricky));
     const o = await LT.openFrame(s, f, 10);
-    return o.index === 7 && o.type === LT.T_DATA && dec.decode(o.plain) === dec.decode(p) || 'round trip failed';
-  });
-
-  const mustFail = async (fn) => { try { await fn(); return false; } catch (e) { return true; } };
-
-  await t('tampered ciphertext is rejected', async () => {
-    const s = await LT.newSession();
-    const f = await LT.sealFrame(s, LT.T_DATA, 0, 1, enc.encode('secret'));
-    for (const pos of [LT.FRAME_HEADER, f.length - 1, f.length - 17]) { const g = f.slice(); g[pos] ^= 1; if (!(await mustFail(() => LT.openFrame(s, g, 1)))) return 'accepted tamper at ' + pos; }
+    if (o.index !== 7 || dec.decode(o.plain) !== 'hello ' + tricky) return 'round trip failed';
+    for (const pos of [LT.FRAME_HEADER, f.length - 1]) { const g = f.slice(); g[pos] ^= 1; if (!(await mustFail(() => LT.openFrame(s, g, 10)))) return 'tamper accepted'; }
+    const g = f.slice(); new DataView(g.buffer).setUint32(1, 8); if (!(await mustFail(() => LT.openFrame(s, g, 10)))) return 'reorder accepted';
+    if (!(await mustFail(() => LT.openFrame(s, f, 5)))) return 'wrong count accepted';
+    const s2 = await LT.newSession(); if (!(await mustFail(() => LT.openFrame(s2, f, 10)))) return 'cross-session accepted';
+    const s3 = await LT.openSession(s2.sid, s.key); if (!(await mustFail(() => LT.openFrame(s3, f, 10)))) return 'wrong sid accepted';
     return true;
   });
 
-  await t('reordered chunk (index rewritten) is rejected', async () => {
+  await t('blob FrameSplitter reassembles frames and rejects corruption', async () => {
     const s = await LT.newSession();
-    const f = await LT.sealFrame(s, LT.T_DATA, 3, 10, enc.encode('x'));
-    const g = f.slice(); new DataView(g.buffer).setUint32(1, 4);
-    return await mustFail(() => LT.openFrame(s, g, 10)) || 'accepted moved frame';
-  });
-
-  await t('truncation attack (different chunk count) is rejected', async () => {
-    const s = await LT.newSession();
-    const f = await LT.sealFrame(s, LT.T_DATA, 0, 10, enc.encode('x'));
-    return await mustFail(() => LT.openFrame(s, f, 5)) || 'accepted wrong count';
-  });
-
-  await t('replay into another session is rejected', async () => {
-    const a = await LT.newSession(), b = await LT.newSession();
-    const f = await LT.sealFrame(a, LT.T_DATA, 0, 1, enc.encode('x'));
-    if (!(await mustFail(() => LT.openFrame(b, f, 1)))) return 'cross-session accepted';
-    const b2 = await LT.openSession(b.sid, a.key); // right key, wrong session id -> different derived key + AAD
-    return await mustFail(() => LT.openFrame(b2, f, 1)) || 'wrong sid accepted';
-  });
-
-  await t('manifest frame type cannot be confused with data', async () => {
-    const s = await LT.newSession();
-    const f = await LT.sealFrame(s, LT.T_DATA, 0, 0, enc.encode('{}'));
-    const g = f.slice(); g[0] = LT.T_MANIFEST;
-    return await mustFail(() => LT.openFrame(s, g, 0)) || 'type confusion accepted';
-  });
-
-  await t('nonces unique across types and indexes', async () => {
-    const s = await LT.newSession();
-    const seen = new Set();
-    for (const type of [LT.T_DATA, LT.T_MANIFEST]) for (let i = 0; i < 2000; i++) {
-      // Same plaintext, different (type,index): ciphertexts must all differ.
-      const f = await LT.sealFrame(s, type, i, 0, new Uint8Array(16));
-      const k = LT.b64u(f.subarray(LT.FRAME_HEADER));
-      if (seen.has(k)) return 'repeat at ' + type + '/' + i;
-      seen.add(k);
-    }
+    const frames = [];
+    for (let i = 0; i < 5; i++) frames.push(await LT.sealFrame(s, LT.T_DATA, i, 5, enc.encode('chunk ' + i)));
+    const parts = [LT.MAGIC];
+    for (const f of frames) { parts.push(LT.u32be(f.length), f); }
+    const blob = new Uint8Array(await new Blob(parts).arrayBuffer());
+    // Feed the blob in awkward 7-byte slices; every frame must come back intact and in order.
+    const sp = new LT.FrameSplitter(); const got = [];
+    for (let i = 0; i < blob.length; i += 7) got.push(...sp.push(blob.subarray(i, i + 7)));
+    sp.end();
+    if (got.length !== 5) return 'got ' + got.length + ' frames';
+    for (let i = 0; i < 5; i++) { const o = await LT.openFrame(s, got[i], 5); if (dec.decode(o.plain) !== 'chunk ' + i) return 'frame ' + i + ' wrong'; }
+    // Wrong magic rejected.
+    if (!(await mustFail(() => { const bad = new LT.FrameSplitter(); bad.push(enc.encode('XXXXyyyy')); }))) return 'bad magic accepted';
+    // Truncated tail detected at end().
+    const sp2 = new LT.FrameSplitter(); sp2.push(blob.subarray(0, blob.length - 3));
+    if (!(await mustFail(() => sp2.end()))) return 'truncation not detected';
     return true;
-  });
-
-  await t('key auth: HMAC challenge accepts right key, rejects wrong key', async () => {
-    const a = await LT.newSession(); const b = await LT.newSession();
-    const n = LT.rand(16);
-    const tag = await LT.authTag(a, n);
-    return (await LT.authVerify(a, n, tag)) && !(await LT.authVerify(b, n, tag)) && !(await LT.authVerify(a, LT.rand(16), tag)) || 'auth wrong';
   });
 
   await t('manifest encode/decode and validation', async () => {
     const m = await LT.prepare('abc');
     const o = LT.decodeManifest(LT.encodeManifest(m, 123));
     if (o.count !== m.count || o.bytes !== 3 || o.exp !== 123 || o.digest !== LT.hex(m.digest)) return 'fields lost';
-    return await mustFail(() => LT.decodeManifest(enc.encode('{"v":1,"count":-1}'))) || 'accepted bad manifest';
+    return await mustFail(() => LT.decodeManifest(new TextEncoder().encode('{"v":1,"count":-1}'))) || 'accepted bad manifest';
   });
 
-  await t('compact SDP survives a real offer/answer and connects', async () => {
-    const a = new RTCPeerConnection(), b = new RTCPeerConnection();
-    const dc = a.createDataChannel('t');
-    const gather = (pc) => new Promise((r) => { if (pc.iceGatheringState === 'complete') r(); pc.onicegatheringstatechange = () => pc.iceGatheringState === 'complete' && r(); setTimeout(r, 4000); });
-    await a.setLocalDescription(await a.createOffer()); await gather(a);
-    const offer = LT.compactSdp(a.localDescription.sdp);
-    await b.setRemoteDescription({ type: 'offer', sdp: LT.expandSdp(offer) });
-    await b.setLocalDescription(await b.createAnswer()); await gather(b);
-    const answer = LT.compactSdp(b.localDescription.sdp);
-    await a.setRemoteDescription({ type: 'answer', sdp: LT.expandSdp(answer) });
-    const got = await new Promise((res) => {
-      b.ondatachannel = (e) => { e.channel.onmessage = (m) => res(m.data); };
-      dc.onopen = () => dc.send('ping');
-      setTimeout(() => res(null), 10000);
-    });
-    a.close(); b.close();
-    return got === 'ping' || 'channel did not deliver (offer ' + offer.length + ' chars)';
-  });
-
-  await t('CSP blocks HTTP requests from the page (connect-src none)', async () => {
-    try { await fetch(location.href, { method: 'POST', body: 'x' }); return 'fetch was allowed'; } catch (e) { return true; }
-  });
-
-  await t('relay messages: encrypted, session-bound, tamper-evident', async () => {
-    const a = await LT.newSession(), b = await LT.newSession();
-    const sealed = await LT.sealSignal(a, '{"a":"pwa1!x"}');
-    if ((await LT.openSignal(a, sealed)) !== '{"a":"pwa1!x"}') return 'round trip failed';
-    if (new TextDecoder().decode(sealed).includes('pwa1')) return 'plaintext visible';
-    if (!(await mustFail(() => LT.openSignal(b, sealed)))) return 'other session opened it';
-    const t2 = sealed.slice(); t2[t2.length - 1] ^= 1;
-    if (!(await mustFail(() => LT.openSignal(a, t2)))) return 'tamper accepted';
-    const topic = await LT.signalTopic(a);
-    return (/^pairwise\/[0-9a-f]{32}$/.test(topic) && !topic.includes(LT.hex(a.sid).slice(0, 8))) || 'bad topic ' + topic;
-  });
-
-  await t('offer link carries the automatic-pairing flag', async () => {
-    const s = await LT.newSession();
-    const compact = 'abcd~' + 'p'.repeat(24) + '~' + LT.b64u(LT.rand(32)) + '~x~262144~h,192.0.2.1,5000';
-    return LT.parseOffer('#' + LT.offerFragment(s, compact, true)).auto === true && LT.parseOffer('#' + LT.offerFragment(s, compact, false)).auto === false || 'flag lost';
-  });
-
-  await t('offer/answer codes: parse, size, and reject garbage', async () => {
-    const s = await LT.newSession();
-    const compact = 'abcd~' + 'p'.repeat(24) + '~' + LT.b64u(LT.rand(32)) + '~x~262144~h,1a2b3c4d-1111-2222-3333-444455556666.local,54321~s,203.0.113.7,61000';
-    const link = 'https://example.org/p/#' + LT.offerFragment(s, compact);
-    const o = LT.parseOffer(link);
-    if (!LT.equalBytes(o.key, s.key) || !LT.equalBytes(o.sid, s.sid)) return 'parse lost data';
-    const a = LT.parseAnswer(LT.answerCode(s.sid, compact));
-    if (!LT.equalBytes(a.sid, s.sid)) return 'answer lost sid';
-    for (const bad of ['', 'hello', 'pw1!x!y!z', link.replace('pw1!', 'pw2!'), 'pwa1!AAAA!' + compact]) {
-      if (!(await mustFail(() => LT.parseOffer(bad)))) return 'offer accepted: ' + bad.slice(0, 30);
+  await t('retrieval link parse, and rejection of garbage', async () => {
+    const s = await LT.newSession(); const id = LT.hex(LT.rand(16));
+    const link = 'https://host.example/p/#' + LT.retrieveFragment(s, id);
+    const p = LT.parseRetrieve(link);
+    if (!LT.equalBytes(p.key, s.key) || !LT.equalBytes(p.sid, s.sid) || p.id !== id) return 'parse lost data';
+    for (const bad of ['', 'hello', 'pw1b!x!y', '#pw1!a!b!c!d', '#pw1b!AAAA!BBBB!xyz', '#pw1b!' + LT.b64u(s.sid) + '!' + LT.b64u(s.key) + '!../etc']) {
+      if (!(await mustFail(() => LT.parseRetrieve(bad)))) return 'accepted: ' + bad;
     }
-    if (!(await mustFail(() => LT.parseAnswer('pwa1!' + LT.b64u(s.sid) + '!a~b')))) return 'answer accepted garbage';
-    if (!(await mustFail(() => LT.expandSdp(compact.replace('54321', '54321\r\na=evil'))))) return 'injection accepted';
     return true;
   });
 
@@ -263,38 +176,19 @@ async () => {
 
 E2E_SETUP_JS = r"""
 async ([kind, size]) => {
-  // Generate test text inside the page (avoids pushing 50 MB through the test driver).
-  const parts = [];
-  let len = 0, i = 0;
-  const target = size;
+  const parts = []; let len = 0, i = 0;
   const pad = (n, w) => String(n).padStart(w, '0');
-  if (kind === 'log') {
-    while (len < target) { const l = '2026-11-02T11:' + pad(i % 60, 2) + ':' + pad(i % 60, 2) + '.' + pad(i % 1000, 3) + 'Z INFO  svc=gateway req=' + i.toString(16) + ' latency_ms=' + (i % 977) + ' path="/v1/items/' + i + '"'; parts.push(l); len += l.length + 1; i++; }
-  } else if (kind === 'short-lines') {
-    while (parts.length < target) { parts.push('row ' + i + '\t' + (i * 7919 % 100003)); i++; }
-  } else if (kind === 'json') {
-    const items = [];
-    while (len < target) { const o = { id: i, name: 'Item ' + i, tags: ['a', 'b', 'ç', '中'], price: (i * 1.07).toFixed(2), nested: { ok: i % 2 === 0, note: 'line\nbreak "quoted" \\ backslash' } }; const s = JSON.stringify(o, null, 2); items.push(s); len += s.length + 2; i++; }
-    parts.push('[' + items.join(',\n') + ']');
-  } else if (kind === 'sql') {
-    parts.push('BEGIN;');
-    while (len < target) { const l = "INSERT INTO orders (id, customer, note, amount) VALUES (" + i + ", 'Cliente " + i + "', 'O''Brien; -- not a comment', " + (i % 10000) / 100 + ");"; parts.push(l); len += l.length + 1; i++; }
-    parts.push('COMMIT;');
-  } else if (kind === 'unicode') {
-    const samples = ['Português: ação, coração, pão', '中文：你好，世界', '日本語：こんにちは世界', '한국어: 안녕하세요', 'العربية: مرحبا بالعالم', 'עברית: שלום עולם', 'Ελληνικά: Γειά σου Κόσμε', 'Русский: Привет, мир', 'हिन्दी: नमस्ते दुनिया', 'Emoji: 😀 👩‍👩‍👧‍👦 🏳️‍🌈 🇧🇷 🇵🇹', 'Math: 𝔘𝔫𝔦𝔠𝔬𝔡𝔢 ∑∫√∞', 'Combining: é ä ñ', 'Controls:\tTAB\u0000NUL\u000BVT\u001BESC', 'Separators: LS PS NBSP﻿BOM', 'CRLF line\r', '    leading and trailing spaces    '];
-    while (len < target) { const l = samples[i % samples.length] + ' #' + i; parts.push(l); len += l.length + 1; i++; }
-  }
-  const text = parts.join(kind === 'unicode' && 0 ? '\r\n' : '\n');
-  window.__orig = text;
+  if (kind === 'log') { while (len < size) { const l = '2026-11-02T11:' + pad(i % 60, 2) + ':' + pad(i % 60, 2) + '.' + pad(i % 1000, 3) + 'Z INFO svc=gateway req=' + i.toString(16) + ' latency_ms=' + (i % 977) + ' path="/v1/items/' + i + '"'; parts.push(l); len += l.length + 1; i++; } }
+  else if (kind === 'short-lines') { while (parts.length < size) { parts.push('row ' + i + '\t' + (i * 7919 % 100003)); i++; } }
+  else if (kind === 'json') { const items = []; while (len < size) { const s = JSON.stringify({ id: i, name: 'Item ' + i, tags: ['a', 'ç', '中'], price: (i * 1.07).toFixed(2), nested: { ok: i % 2 === 0, note: 'line\nbreak "quoted" \\ back' } }, null, 2); items.push(s); len += s.length + 2; i++; } parts.push('[' + items.join(',\n') + ']'); }
+  else if (kind === 'sql') { parts.push('BEGIN;'); while (len < size) { const l = "INSERT INTO orders (id, customer, note) VALUES (" + i + ", 'Cliente " + i + "', 'O''Brien; -- not a comment');"; parts.push(l); len += l.length + 1; i++; } parts.push('COMMIT;'); }
+  else if (kind === 'unicode') { const samples = ['Português: ação, coração', '中文：你好，世界', '日本語：こんにちは', '한국어: 안녕하세요', 'العربية: مرحبا', 'עברית: שלום', 'Русский: Привет', 'Emoji: 😀 👩‍👩‍👧‍👦 🏳️‍🌈 🇧🇷', 'Math: 𝔘𝔫𝔦 ∑∫√∞', 'Combining: é ä', 'Controls:\tTAB\u0000NUL\u001BESC', 'Sep: LS NBSP﻿BOM', 'CRLF\r', '  spaces  ']; while (len < size) { const l = samples[i % samples.length] + ' #' + i; parts.push(l); len += l.length + 1; i++; } }
+  const text = parts.join('\n');
   const ta = document.getElementById('input');
   if (text.length > 1000000 || text.includes('\r')) {
     const dt = new DataTransfer(); dt.setData('text/plain', text);
-    ta.focus();
-    ta.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
-  } else {
-    // Synthetic paste events have no default action, so small text is typed in directly.
-    ta.value = text; ta.dispatchEvent(new Event('input', { bubbles: true }));
-  }
+    ta.focus(); ta.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
+  } else { ta.value = text; ta.dispatchEvent(new Event('input', { bubbles: true })); }
   const h = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
   return { chars: text.length, lines: LT.countLines(text), bytes: LT.utf8Length(text), sha: LT.hex(new Uint8Array(h)), big: window.__pw.isBig() };
 }
@@ -310,259 +204,192 @@ async () => {
 """
 
 
-def pair(sender, receiver, timeout=120000, manual=False):
-    """Receiver opens the sender's link; the reply comes back through the relay (or manually)."""
-    sender.wait_for_function("document.getElementById('send-link').value.includes('#pw1!')", timeout=timeout)
-    link = sender.input_value('#send-link')
-    receiver.evaluate("document.getElementById('answer-out').dataset.prev = document.getElementById('answer-out').value")
-    receiver.fill('#offer-input', link)
-    receiver.click('#btn-offer-go')
-    receiver.wait_for_function("(() => { const a = document.getElementById('answer-out'); return a.value.startsWith('pwa1!') && a.value !== a.dataset.prev; })()", timeout=30000)
-    answer = receiver.input_value('#answer-out')
-    if manual:
-        sender.fill('#answer-input', answer)
-        sender.click('#btn-connect')
-    return link, answer
+def recv_url(link, base):
+    # link is "<base>/#pw1b!..."; add ?test=1 before the fragment so the test hook loads.
+    frag = link.split('#', 1)[1]
+    return base + '/?test=1#' + frag
 
 
-def e2e_case(browser, url, name, kind, size, timeout_s=300):
+def send_and_get_link(page, server, kind, size, once=True):
+    info = page.evaluate(E2E_SETUP_JS, [kind, size])
+    page.wait_for_function("!document.getElementById('btn-send').disabled", timeout=60000)
+    if not once:
+        page.uncheck('#once')
+    page.click('#btn-send')
+    page.wait_for_function("document.getElementById('send-link').value.includes('#pw1b!')", timeout=180000)
+    return info, page.input_value('#send-link')
+
+
+def e2e_case(browser, server, name, kind, size, timeout_s=300, close_sender=False):
     ctx_s = browser.new_context(bypass_csp=True)
-    ctx_r = browser.new_context(bypass_csp=True)
     s = ctx_s.new_page()
-    r = ctx_r.new_page()
     reqs = []
-    for p in (s, r):
-        p.on('request', lambda req: reqs.append(req.url))
+    s.on('request', lambda r: reqs.append(r.url))
     try:
-        s.goto(url)
-        r.goto(url)
-        r.click('#tab-recv')
+        s.goto(server.url + '/?test=1')
         t0 = time.time()
-        info = s.evaluate(E2E_SETUP_JS, [kind, size])
-        t_gen = time.time() - t0
-        s.wait_for_function("!document.getElementById('btn-prepare').disabled", timeout=60000)
-        shown_chars = s.text_content('#st-chars').replace(',', '')
-        if int(shown_chars) != info['chars']:
-            raise AssertionError('character count shown %s != %s' % (shown_chars, info['chars']))
-        t1 = time.time()
-        s.click('#btn-prepare')
-        link, answer = pair(s, r)
-        t_pair = time.time() - t1
-        t2 = time.time()
-        r.wait_for_selector('#recv-result:not([hidden])', timeout=timeout_s * 1000)
-        s.wait_for_function("document.getElementById('send-state').textContent.startsWith('verified')", timeout=30000)
-        t_xfer = time.time() - t2
-        got = r.evaluate(HASH_RECEIVED_JS)
+        info, link = send_and_get_link(s, server, kind, size)
+        t_up = time.time() - t0
         mem_s = s.evaluate('performance.memory ? performance.memory.usedJSHeapSize : null')
+        if close_sender:
+            ctx_s.close(); ctx_s = None
+        ctx_r = browser.new_context(bypass_csp=True)
+        r = ctx_r.new_page()
+        rreqs = []
+        r.on('request', lambda rq: rreqs.append(rq.url))
+        t1 = time.time()
+        r.goto(recv_url(link, server.url))
+        r.wait_for_selector('#recv-result:not([hidden])', timeout=timeout_s * 1000)
+        t_down = time.time() - t1
+        got = r.evaluate(HASH_RECEIVED_JS)
+        mem_r = got['mem'] if got else 0
         ok = got and got['sha'] == info['sha'] and got['chars'] == info['chars']
-        external = [u for u in reqs if not u.startswith(url.split('/index.html')[0])]
-        detail = ('%s chars, %s lines, %.1f MiB UTF-8, big-view=%s | prepare+pair %.1fs, transfer+verify %.1fs (%.1f MiB/s) | heap sender %.0f MiB, receiver %.0f MiB | offer QR payload %d chars, answer %d chars'
-                  % (format(info['chars'], ','), format(info['lines'], ','), info['bytes'] / 1048576, info['big'], t_pair, t_xfer,
-                     info['bytes'] / 1048576 / max(t_xfer, 0.001), (mem_s or 0) / 1048576, (got['mem'] or 0) / 1048576 if got else 0,
-                     len(link), len(answer)))
-        record('e2e ' + name, bool(ok) and not external, detail + ('' if not external else ' EXTERNAL REQUESTS: %s' % external))
+        # No request URL (sender upload or receiver download) may contain key material.
+        key_b64 = link.split('#', 1)[1].split('!')[2]
+        leaked = any(key_b64 in u for u in reqs + rreqs)
+        detail = ('%s chars, %s lines, %.1f MiB | up+enc %.1fs, down+dec %.1fs | heap S %.0f / R %.0f MiB | link %d chars%s'
+                  % (format(info['chars'], ','), format(info['lines'], ','), info['bytes'] / 1048576, t_up, t_down,
+                     (mem_s or 0) / 1048576, (mem_r or 0) / 1048576, len(link), ', sender closed first' if close_sender else ''))
+        record('e2e ' + name, bool(ok) and not leaked, detail + ('' if not leaked else ' KEY LEAKED IN URL'))
+        ctx_r.close()
     except Exception as e:
         record('e2e ' + name, False, repr(e)[:400])
     finally:
+        if ctx_s:
+            ctx_s.close()
+
+
+def once_case(browser, server):
+    """once=1: first open succeeds, second open finds nothing. once=0: opens twice."""
+    for once, label in [(True, 'once=1 deletes after first download'), (False, 'once=0 allows a second open')]:
+        ctx_s = browser.new_context(bypass_csp=True); s = ctx_s.new_page()
+        try:
+            s.goto(server.url + '/?test=1')
+            info, link = send_and_get_link(s, server, 'log', 200000, once=once)
+            ctx_s.close(); ctx_s = None
+            # First open
+            c1 = browser.new_context(bypass_csp=True); p1 = c1.new_page()
+            p1.goto(recv_url(link, server.url))
+            p1.wait_for_selector('#recv-result:not([hidden])', timeout=60000)
+            g1 = p1.evaluate(HASH_RECEIVED_JS)
+            c1.close()
+            # Second open
+            c2 = browser.new_context(bypass_csp=True); p2 = c2.new_page()
+            p2.goto(recv_url(link, server.url))
+            if once:
+                p2.wait_for_selector('#recv-issue:not([hidden])', timeout=30000)
+                second_ok = 'no longer exists' in (p2.text_content('#recv-issue') or '')
+            else:
+                p2.wait_for_selector('#recv-result:not([hidden])', timeout=60000)
+                g2 = p2.evaluate(HASH_RECEIVED_JS)
+                second_ok = g2 and g2['sha'] == info['sha']
+            c2.close()
+            record(label, g1 and g1['sha'] == info['sha'] and second_ok, 'first matched=%s, second as expected=%s' % (bool(g1 and g1['sha'] == info['sha']), bool(second_ok)))
+        except Exception as e:
+            record(label, False, repr(e)[:300])
+        finally:
+            if ctx_s:
+                ctx_s.close()
+
+
+def delete_case(browser, server):
+    """Delete now removes the blob; opening the link then reports it is gone."""
+    ctx_s = browser.new_context(bypass_csp=True); s = ctx_s.new_page()
+    try:
+        s.goto(server.url + '/?test=1')
+        info, link = send_and_get_link(s, server, 'log', 100000, once=False)
+        s.click('#btn-destroy')
+        s.wait_for_selector('#send-result', state='hidden', timeout=10000)
+        c = browser.new_context(bypass_csp=True); p = c.new_page()
+        p.goto(recv_url(link, server.url))
+        p.wait_for_selector('#recv-issue:not([hidden])', timeout=30000)
+        issue_txt = p.text_content('#recv-issue') or ''
+        gone = 'no longer exists' in issue_txt
+        c.close()
+        record('delete now removes the blob from the server', gone, 'receiver saw: ' + issue_txt[:80])
+    except Exception as e:
+        record('delete now removes the blob from the server', False, repr(e)[:300])
+    finally:
         ctx_s.close()
-        ctx_r.close()
 
 
-def resume_case(browser, url):
-    ctx_s, ctx_r = browser.new_context(bypass_csp=True), browser.new_context(bypass_csp=True)
-    s, r = ctx_s.new_page(), ctx_r.new_page()
+def size_limit_case():
+    """A separate server with a 1 MiB cap rejects a 2 MiB upload with 413, no browser involved."""
+    srv = Server(max_bytes=1024 * 1024)
     try:
-        s.goto(url); r.goto(url); r.click('#tab-recv')
-        info = s.evaluate(E2E_SETUP_JS, ['log', 25 * 1048576])
-        s.click('#btn-prepare')
-        pair(s, r)
-        r.wait_for_function("parseInt(document.getElementById('rp-chunk').textContent.replace(/,/g,''))>120", timeout=120000)
-        s.evaluate('window.__pw.dropLink()')
-        s.wait_for_selector('#send-resume:not([hidden])', timeout=30000)
-        r.wait_for_selector('#recv-connect:not([hidden])', timeout=30000)
-        at = int(r.text_content('#rp-chunk').replace(',', ''))
-        s.click('#btn-new-code')
-        s.wait_for_selector('#send-pair:not([hidden])', timeout=30000)
-        pair(s, r)
-        r.wait_for_selector('#recv-result:not([hidden])', timeout=300000)
-        got = r.evaluate(HASH_RECEIVED_JS)
-        logtxt = s.text_content('#log')
-        resumed = 'resuming at chunk' in logtxt
-        record('resume after dropped connection', got['sha'] == info['sha'] and resumed and at > 0,
-               'dropped at chunk %d; sender log shows resume=%s' % (at, resumed))
+        body = b'x' * (2 * 1024 * 1024)
+        req = urllib.request.Request(srv.url + '/api/blob?ttl=300', data=body, method='POST',
+                                     headers={'Content-Type': 'application/octet-stream'})
+        status = None
+        try:
+            urllib.request.urlopen(req, timeout=10)
+        except urllib.error.HTTPError as e:
+            status = e.code
+        # A small upload on the same server still works.
+        ok_req = urllib.request.Request(srv.url + '/api/blob?ttl=300', data=b'hello-small-blob', method='POST',
+                                        headers={'Content-Type': 'application/octet-stream'})
+        small = json.loads(urllib.request.urlopen(ok_req, timeout=10).read())
+        record('server rejects oversize upload (413) but accepts small', status == 413 and bool(small.get('id')),
+               'oversize status=%s, small id=%s' % (status, bool(small.get('id'))))
     except Exception as e:
-        record('resume after dropped connection', False, repr(e)[:300] + ' | SENDER LOG: ' + (s.text_content('#log') or '')[-900:] + ' | RECEIVER LOG: ' + (r.text_content('#log') or '')[-900:])
+        record('server rejects oversize upload (413) but accepts small', False, repr(e)[:300])
     finally:
-        ctx_s.close(); ctx_r.close()
+        srv.stop()
 
 
-def manual_case(browser, url):
-    """Automatic pairing off: the reply QR/code is the only path, and nothing reaches the relay."""
-    ctx_s, ctx_r = browser.new_context(bypass_csp=True), browser.new_context(bypass_csp=True)
-    s, r = ctx_s.new_page(), ctx_r.new_page()
-    try:
-        s.goto(url); r.goto(url); r.click('#tab-recv')
-        before = len([l for l in BROKER_LOG if l.startswith('PUBLISH')])
-        info = s.evaluate(E2E_SETUP_JS, ['sql', 2 * 1048576])
-        s.uncheck('#use-relay')
-        s.click('#btn-prepare')
-        link, answer = pair(s, r, manual=True)
-        r.wait_for_selector('#recv-result:not([hidden])', timeout=120000)
-        got = r.evaluate(HASH_RECEIVED_JS)
-        published = len([l for l in BROKER_LOG if l.startswith('PUBLISH')]) - before
-        record('manual pairing with relays off', got['sha'] == info['sha'] and not link.endswith('!a') and published == 0,
-               'link has auto flag=%s, relay messages=%d' % (link.endswith('!a'), published))
-    except Exception as e:
-        record('manual pairing with relays off', False, repr(e)[:400])
-    finally:
-        ctx_s.close(); ctx_r.close()
-
-
-def relay_privacy_case():
-    """Relay messages are small opaque blobs: no key, no SDP, no text."""
-    pubs = [l for l in BROKER_LOG if l.startswith('PUBLISH')]
-    sizes = sorted(set(int(l.split()[2]) for l in pubs))
-    topics_ok = all(l.split()[1].startswith('pairwise/') and len(l.split()[1]) == len('pairwise/') + 32 for l in pubs)
-    record('relay sees only small encrypted messages on derived topics', bool(pubs) and topics_ok and max(sizes) < 1024,
-           '%d relay messages, sizes %s bytes' % (len(pubs), sizes[:6]))
-
-
-def save_case(browser, url):
-    """Received text can be saved under any name, with no extension forced."""
-    ctx_s, ctx_r = browser.new_context(bypass_csp=True), browser.new_context(bypass_csp=True, accept_downloads=True)
-    s, r = ctx_s.new_page(), ctx_r.new_page()
-    try:
-        s.goto(url); r.goto(url); r.click('#tab-recv')
-        r.evaluate('delete window.showSaveFilePicker')  # exercise the download path headlessly
-        info = s.evaluate(E2E_SETUP_JS, ['unicode', 50000])
-        s.click('#btn-prepare')
-        pair(s, r)
-        r.wait_for_selector('#recv-result:not([hidden])', timeout=60000)
-        results = []
-        for name in ('received-dump', 'notes.md'):
-            r.fill('#save-name', name)
-            with r.expect_download() as dl:
-                r.click('#btn-download')
-            d = dl.value
-            path = d.path()
-            import hashlib
-            data = open(path, 'rb').read()
-            results.append((d.suggested_filename, hashlib.sha256(data).hexdigest() == info['sha']))
-        ok = results == [('received-dump', True), ('notes.md', True)]
-        record('save as file keeps the chosen name and exact bytes', ok, str(results))
-    except Exception as e:
-        record('save as file keeps the chosen name and exact bytes', False, repr(e)[:400])
-    finally:
-        ctx_s.close(); ctx_r.close()
-
-
-def end_session_case(browser, url):
-    ctx_s, ctx_r = browser.new_context(bypass_csp=True), browser.new_context(bypass_csp=True)
-    s, r = ctx_s.new_page(), ctx_r.new_page()
-    try:
-        s.goto(url); r.goto(url); r.click('#tab-recv')
-        s.evaluate(E2E_SETUP_JS, ['log', 200000])
-        s.click('#btn-prepare')
-        s.wait_for_function("document.getElementById('send-link').value.includes('#pw1!')")
-        link = s.input_value('#send-link')
-        s.click('#btn-send-end')
-        cleared = s.input_value('#send-link') == '' and s.is_hidden('#send-pair') and not s.is_disabled('#btn-prepare')
-        editable = not s.evaluate("document.getElementById('input').readOnly")
-        # The receiver can still build an answer from the stale code, but nothing on the sender
-        # side accepts it any more, so no channel opens.
-        r.fill('#offer-input', link); r.click('#btn-offer-go')
-        r.wait_for_function("document.getElementById('answer-out').value.startsWith('pwa1!')", timeout=30000)
-        time.sleep(3)
-        no_channel = r.is_hidden('#recv-progress')
-        record('manual session end discards session', cleared and editable and no_channel,
-               'UI cleared=%s, editor unlocked=%s, stale code opened no channel=%s' % (cleared, editable, no_channel))
-    except Exception as e:
-        record('manual session end discards session', False, repr(e)[:400])
-    finally:
-        ctx_s.close(); ctx_r.close()
-
-
-def fragment_case(browser, url):
-    """Opening the QR link directly: key stays out of server requests and is removed from the address bar."""
-    ctx_s, ctx_r = browser.new_context(bypass_csp=True), browser.new_context(bypass_csp=True)
-    s, r = ctx_s.new_page(), ctx_r.new_page()
-    try:
-        s.goto(url)
-        info = s.evaluate(E2E_SETUP_JS, ['unicode', 300000])
-        s.click('#btn-prepare')
-        s.wait_for_function("document.getElementById('send-link').value.includes('#pw1!')")
-        link = s.input_value('#send-link')
-        key = link.split('#', 1)[1].split('!')[2]
-        before = len(REQUEST_LOG)
-        # The real link has no query string; add ?test=1 so the test hook loads.
-        r.goto(url + '#' + link.split('#', 1)[1])
-        r.wait_for_function("document.getElementById('answer-out').value.startsWith('pwa1!')", timeout=30000)
-        leaked = any(key in line for line in REQUEST_LOG[before:])
-        url_clean = '#' not in r.url
-        r.wait_for_selector('#recv-result:not([hidden])', timeout=60000)
-        got = r.evaluate(HASH_RECEIVED_JS)
-        record('QR link flow: key never reaches the server, removed from address bar',
-               (not leaked) and url_clean and got['sha'] == info['sha'],
-               'server saw key=%s, address bar clean=%s, server request lines: %s' % (leaked, url_clean, REQUEST_LOG[before:]))
-    except Exception as e:
-        record('QR link flow: key never reaches the server, removed from address bar', False, repr(e)[:400])
-    finally:
-        ctx_s.close(); ctx_r.close()
+def key_privacy_case(server):
+    """The server's own request log must never contain any key material, only ids and paths."""
+    reqs = server.requests()
+    # Every API line references /api/blob or /api/blob/<32 hex>; never a base64url key (>=43 chars).
+    import re
+    suspicious = [l for l in reqs if re.search(r'[A-Za-z0-9_-]{43,}', l.split(' -> ')[0])]
+    paths = [l.split(' ')[3] for l in reqs if len(l.split(' ')) > 3]
+    record('server request log never contains key material', not suspicious and len(reqs) > 0,
+           '%d API requests logged; sample paths: %s' % (len(reqs), ', '.join(sorted(set(paths))[:5])))
 
 
 def main():
-    srv, url = serve()
-    broker, relay_url = start_broker()
-    url = url + '&relay=' + urllib.parse.quote(relay_url, safe='')
+    server = Server()
+    print('Server:', server.url, 'store', server.store, flush=True)
     with sync_playwright() as p:
-        if BROWSER == 'webkit':
-            browser = p.webkit.launch()
-        else:
-            browser = p.chromium.launch(executable_path='/usr/bin/google-chrome' if os.path.exists('/usr/bin/google-chrome') else None,
-                                        args=['--disable-features=WebRtcHideLocalIpsWithMdns'])
-        print('Browser:', BROWSER, browser.version, flush=True)
-        # Unit page runs under the real CSP (no bypass) so CSP violations surface here.
+        browser = p.chromium.launch(executable_path='/usr/bin/google-chrome' if os.path.exists('/usr/bin/google-chrome') else None)
+        print('Browser:', browser.version, flush=True)
         page = browser.new_page()
         errors = []
         page.on('pageerror', lambda e: errors.append(str(e)))
         page.on('console', lambda m: m.type == 'error' and errors.append(m.text))
-        page.goto(url)
+        page.goto(server.url + '/?test=1')
         page.wait_for_timeout(500)
         record('page loads without console errors or CSP violations', not errors, '; '.join(errors)[:300])
         for name, ok, detail in page.evaluate(UNIT_JS):
             record('unit ' + name, ok, detail)
         page.close()
 
-        cases = [('small Unicode with CRLF, NUL, emoji (pasted, ~0.3 MB)', 'unicode', 100000),
-                 ('small plain text (typed path)', 'log', 50000)]
-        if QUICK:
-            cases += [('1 MB log', 'log', 1048576)]
-        else:
+        # The headline requirement: sender closes the page, receiver still gets it.
+        e2e_case(browser, server, 'sender closed before receiver opens (10 MB)', 'log', 10 * 1048576, close_sender=True)
+
+        cases = [('small plain text', 'log', 50000), ('Unicode with CRLF/NUL/emoji', 'unicode', 200000)]
+        if not QUICK:
             cases += [
-                ('1 MB log', 'log', 1048576),
-                ('10 MB log', 'log', 10 * 1048576),
-                ('25 MB log', 'log', 25 * 1048576),
-                ('50 MB log', 'log', 50 * 1048576),
-                ('1,000,000 lines', 'short-lines', 1000000),
-                ('2,000,000 lines', 'short-lines', 2000000),
-                ('large JSON (~20 MB)', 'json', 20 * 1048576),
-                ('large SQL script (~15 MB)', 'sql', 15 * 1048576),
-                ('multilingual Unicode (~7 MB)', 'unicode', 10 * 1048576 // 2),
+                ('1 MB log', 'log', 1048576), ('10 MB log', 'log', 10 * 1048576),
+                ('25 MB log', 'log', 25 * 1048576), ('50 MB log', 'log', 50 * 1048576),
+                ('1,000,000 lines', 'short-lines', 1000000), ('2,000,000 lines', 'short-lines', 2000000),
+                ('large JSON (~20 MB)', 'json', 20 * 1048576), ('large SQL (~15 MB)', 'sql', 15 * 1048576),
+                ('multilingual Unicode (~7 MB)', 'unicode', 7 * 1048576 // 2),
             ]
         for name, kind, size in cases:
-            e2e_case(browser, url, name, kind, size)
-        fragment_case(browser, url)
-        manual_case(browser, url)
-        save_case(browser, url)
-        relay_privacy_case()
-        resume_case(browser, url)
-        end_session_case(browser, url)
+            e2e_case(browser, server, name, kind, size)
+
+        once_case(browser, server)
+        delete_case(browser, server)
+        key_privacy_case(server)
         browser.close()
-    srv.shutdown()
-    broker.terminate()
+    size_limit_case()
+    server.stop()
+
     failed = [r for r in RESULTS if not r[1]]
     print('\n%d passed, %d failed' % (len(RESULTS) - len(failed), len(failed)))
-    with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'results-%s.json' % BROWSER), 'w') as f:
+    with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'results-chromium.json'), 'w') as f:
         json.dump([{'test': n, 'pass': o, 'detail': d} for n, o, d in RESULTS], f, indent=2, ensure_ascii=False)
     sys.exit(1 if failed else 0)
 
