@@ -91,6 +91,7 @@ details > summary { cursor: pointer; color: var(--muted); }
 .step .num { display: inline-block; min-width: 1.6em; color: var(--accent); font-variant-numeric: tabular-nums; }
 .copyline { display: flex; gap: 8px; min-width: 0; }
 .copyline input { flex: 1; font-family: var(--font-mono); font-size: 12px; }
+.savebox { flex: 1 1 260px; max-width: 460px; }
 .chip { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; border-radius: 999px; padding: 2px 10px; border: 1px solid var(--line); background: var(--sunk); color: var(--muted); font-variant-numeric: tabular-nums; }
 .chip.ok { color: var(--ok); border-color: currentColor; }
 .chip.warn { color: var(--warn); border-color: currentColor; }
@@ -159,6 +160,8 @@ dialog video { width: 100%; border-radius: var(--radius); background: #000; disp
         </div>
         <label class="small"><input type="checkbox" id="use-stun" checked>
           <span>Use the public STUN server <span class="mono">stun.l.google.com:19302</span> so devices on different networks can find each other. It learns your public IP address and nothing else. Turn off when both devices share a local network.</span></label>
+        <label class="small"><input type="checkbox" id="use-relay" checked>
+          <span>Pair automatically. The receiving device sends its encrypted connection reply back through public message brokers (<span class="mono">__RELAYS__</span>), so it only has to open the link. The brokers see an encrypted message of a few hundred bytes, never the key or the text. Turn off to bring the reply back by scanning a second QR code instead.</span></label>
         <details>
           <summary class="small">TURN relay (optional, for networks that block direct connections)</summary>
           <div class="turn">
@@ -191,11 +194,17 @@ dialog video { width: 100%; border-radius: var(--radius); background: #000; disp
             <div class="copyline"><input type="text" id="send-link" readonly aria-label="Recipient link"><button class="btn" id="btn-copy-link" type="button">Copy link</button></div>
           </div>
           <div class="step">
-            <h3><span class="num">2</span>Bring back the answer from the other device</h3>
-            <p class="small muted" style="margin:0">The receiving device shows an answer QR. Scan it here, or paste its answer code. The answer contains connection details only.</p>
-            <div class="row"><button class="btn" id="btn-scan-answer" type="button">Scan answer with camera</button></div>
-            <textarea id="answer-input" rows="3" spellcheck="false" placeholder="pwa1!…" aria-label="Answer code"></textarea>
-            <div class="row"><button class="btn primary" id="btn-connect" type="button">Connect</button><span class="small" id="answer-error" role="alert"></span></div>
+            <h3><span class="num">2</span>The transfer starts by itself</h3>
+            <p class="small muted" style="margin:0" id="auto-status">Waiting for the other device to open the link…</p>
+            <details id="manual-pair">
+              <summary class="small">Pair manually instead</summary>
+              <div class="step" style="margin-top:8px">
+                <p class="small muted" style="margin:0">If the transfer does not start, open <b>Pair manually</b> on the receiving device. It shows a reply QR: scan it here, or paste its reply code. The reply holds connection details only.</p>
+                <div class="row"><button class="btn" id="btn-scan-answer" type="button">Scan reply with camera</button></div>
+                <textarea id="answer-input" rows="3" spellcheck="false" placeholder="pwa1!…" aria-label="Reply code"></textarea>
+                <div class="row"><button class="btn primary" id="btn-connect" type="button">Connect</button><span class="small" id="answer-error" role="alert"></span></div>
+              </div>
+            </details>
           </div>
         </div>
       </div>
@@ -227,15 +236,19 @@ dialog video { width: 100%; border-radius: var(--radius); background: #000; disp
     </section>
 
     <section class="panel" id="recv-answer" hidden>
-      <div class="row"><h2>Show this answer to the sender</h2><span class="spacer"></span><span class="chip live" id="recv-state">waiting for sender</span></div>
-      <div class="pair">
-        <div class="qrbox"><canvas id="recv-qr" width="320" height="320" aria-label="Answer QR code"></canvas></div>
-        <div class="steps">
-          <p class="small muted" style="margin:0">On the sending device, choose <b>Scan answer with camera</b> and point it at this code. Or copy the answer code and paste it there. It holds connection details only, not the key.</p>
-          <div class="copyline"><input type="text" id="answer-out" readonly aria-label="Answer code"><button class="btn" id="btn-copy-answer" type="button">Copy answer</button></div>
-          <button class="btn danger" id="btn-recv-cancel" type="button" style="justify-self:start">Cancel</button>
+      <div class="row"><h2>Connecting to the sender</h2><span class="spacer"></span><span class="chip live" id="recv-state">connecting</span></div>
+      <p class="small muted" style="margin:0" id="recv-auto-status">The text is decrypted on this device as soon as it arrives.</p>
+      <details id="recv-manual">
+        <summary class="small">Pair manually</summary>
+        <div class="pair" style="margin-top:10px">
+          <div class="qrbox"><canvas id="recv-qr" width="320" height="320" aria-label="Reply QR code"></canvas></div>
+          <div class="steps">
+            <p class="small muted" style="margin:0">On the sending device, open <b>Pair manually instead</b> and scan this code, or copy this reply code there. It holds connection details only, not the key.</p>
+            <div class="copyline"><input type="text" id="answer-out" readonly aria-label="Reply code"><button class="btn" id="btn-copy-answer" type="button">Copy reply</button></div>
+          </div>
         </div>
-      </div>
+      </details>
+      <button class="btn danger" id="btn-recv-cancel" type="button" style="justify-self:start">Cancel</button>
     </section>
 
     <section class="panel" id="recv-progress" hidden>
@@ -249,14 +262,21 @@ dialog video { width: 100%; border-radius: var(--radius); background: #000; disp
       <div class="row">
         <h2>Received text</h2>
         <span class="spacer"></span>
-        <button class="btn primary" id="btn-copy-all" type="button">Copy all</button>
-        <button class="btn" id="btn-download" type="button">Download .txt</button>
         <button class="btn danger" id="btn-recv-clear" type="button">Clear</button>
       </div>
+      <div class="row">
+        <button class="btn primary" id="btn-copy-all" type="button">Copy all</button>
+        <span class="muted small">or</span>
+        <div class="copyline savebox">
+          <input type="text" id="save-name" aria-label="File name" spellcheck="false" autocomplete="off">
+          <button class="btn" id="btn-download" type="button">Save as file</button>
+        </div>
+      </div>
+      <p class="small muted" style="margin:0">Name the file however you like, with any extension or none (for example <span class="mono">notes.md</span>, <span class="mono">dump.sql</span>).</p>
       <div class="notice ok" id="recv-verified"></div>
       <div class="stats"><span><b id="rr-chars">0</b> characters</span><span><b id="rr-lines">0</b> lines</span><span><b id="rr-bytes">0 B</b> UTF-8</span></div>
       <div class="vv" id="recvview"></div>
-      <div class="vv-note">Lines longer than 2,000 characters are shortened on screen only. Copy and download include the complete text.</div>
+      <div class="vv-note">Lines longer than 2,000 characters are shortened on screen only. Copy and save include the complete text.</div>
     </section>
   </main>
 
@@ -268,8 +288,8 @@ dialog video { width: 100%; border-radius: var(--radius); background: #000; disp
   <details class="panel netinfo">
     <summary><b>What this page sends over the network</b></summary>
     <ul class="small">
-      <li>The page itself makes no HTTP requests after it loads. Its Content Security Policy sets <span class="mono">connect-src 'none'</span>, so it cannot upload anything to a web server.</li>
-      <li>Pairing data (connection offer and answer) moves only through the QR codes or links you copy yourself. There is no signaling server.</li>
+      <li>The page makes no HTTP requests after it loads. Its Content Security Policy allows network connections only to the pairing brokers below, over WebSocket, so it cannot upload anything to a web server.</li>
+      <li>The connection offer travels inside the QR code. With automatic pairing on, the receiving device sends its connection reply back through public MQTT message brokers (<span class="mono">__RELAYS__</span>) over secure WebSockets. The reply is encrypted with a key derived from the QR code, so the brokers see only an opaque message of a few hundred bytes on a random-looking topic, plus both devices' IP addresses. With automatic pairing off, nothing goes to the brokers and the reply moves by a second QR code.</li>
       <li>If STUN is on, each browser sends a small request to <span class="mono">stun.l.google.com:19302</span> to learn its public IP address.</li>
       <li>The text travels directly between the two browsers over a WebRTC data channel. WebRTC encrypts the channel with DTLS, and each 48 KiB chunk is additionally sealed with AES-256-GCM using a key that exists only in the QR code.</li>
       <li>If you configure TURN, the encrypted stream may pass through that relay. It cannot read it.</li>
@@ -291,6 +311,7 @@ dialog video { width: 100%; border-radius: var(--radius); background: #000; disp
 <script>__JSQR__</script>
 <script>__CORE__</script>
 <script>__SESSION__</script>
+<script>__RELAY__</script>
 <script>__UI__</script>
 </body>
 </html>
