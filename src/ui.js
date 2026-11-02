@@ -283,7 +283,7 @@
       log('Encrypted ' + nf.format(manifest.count) + ' chunks (' + fmtBytes(blob.size) + ') in ' + Math.round(performance.now() - t0) + ' ms');
 
       $('send-status').textContent = 'Pairing…';
-      const onWait = (i, n) => { $('send-status').textContent = 'Waking the server… (' + i + '/' + n + ')'; };
+      const onWait = (secs) => { $('send-status').textContent = 'Waking the server… ' + secs + 's (free hosts sleep when idle; first use can take up to a minute)'; };
       await NET.wake({ signal, onWait });
       const res = await NET.uploadBlob(blob, { ttl, once, signal, onWait, onProgress: (loaded, total) => {
         $('upload-bar').style.width = (total ? (loaded / total * 100) : 0).toFixed(1) + '%';
@@ -402,7 +402,7 @@
 
     try {
       sess = await LT.openSession(link.sid, link.key);
-      const onWait = () => setChip($('recv-state'), 'waking the server…', 'live');
+      const onWait = (secs) => setChip($('recv-state'), 'waking the server… ' + secs + 's', 'live');
       const meta = await NET.getMeta(link.id, { signal, onWait });
       if (!meta) throw new Error('This transfer no longer exists. It may have expired or already been opened.');
       log('Found it on the server (' + fmtBytes(meta.size) + (meta.once ? ', one-time' : '') + '). Receiving…');

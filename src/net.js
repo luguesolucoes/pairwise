@@ -15,6 +15,10 @@
   // Statuses a sleeping/waking instance (or its edge) returns before it is ready.
   const TRANSIENT = new Set([403, 408, 425, 429, 500, 502, 503, 504]);
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  // Free hosts (Render and the like) spin down when idle and can take up to ~60 s to wake.
+  // Wait out a full cold start before giving up, reporting elapsed seconds so it never looks stuck.
+  const WAKE_MS = 150000;
+  const RETRY_MS = 60000;
 
   function errorFor(status, payload) {
     const code = payload && payload.error;
@@ -25,19 +29,22 @@
     return 'Server error (' + status + (code ? ', ' + code : '') + ').';
   }
 
-  /** Ping /api/health until the instance answers, so the first real request is not rejected
-   *  by a cold start. Resolves true when ready, false after the attempts are exhausted. */
+  /** Ping /api/health until the instance answers, riding out a cold start (up to WAKE_MS).
+   *  Reports elapsed seconds through onWait. Resolves true when ready, false on timeout. */
   async function wake(opts) {
     opts = opts || {};
-    const tries = opts.tries || 12;
-    for (let i = 0; i < tries; i++) {
+    const deadline = Date.now() + (opts.budgetMs || WAKE_MS);
+    let first = true;
+    while (Date.now() < deadline) {
       if (opts.signal && opts.signal.aborted) throw new DOMException('Cancelled', 'AbortError');
       try {
+        // No per-request timeout: a free host often holds the first request open until it is up.
         const r = await fetch(apiBase() + '/api/health', { cache: 'no-store', signal: opts.signal });
         if (r.ok) return true;
       } catch (e) { if (e && e.name === 'AbortError') throw e; }
-      if (opts.onWait) opts.onWait(i + 1, tries);
-      await sleep(2500);
+      if (opts.onWait) opts.onWait(Math.round((Date.now() - (deadline - (opts.budgetMs || WAKE_MS))) / 1000));
+      if (!first) await sleep(3000);
+      first = false;
     }
     return false;
   }
@@ -69,34 +76,33 @@
     const base = apiBase();
     const qs = '?ttl=' + encodeURIComponent(opts.ttl || 900) + (opts.once ? '&once=1' : '');
     const url = base + '/api/blob' + qs;
-    const maxTries = 5;
+    const start = Date.now();
     let last = { status: 0, body: null };
-    for (let i = 0; i < maxTries; i++) {
+    do {
       last = await postOnce(url, blob, opts.onProgress, opts.signal);
       if (last.status === 201 && last.body && last.body.id) return last.body;
-      if (!TRANSIENT.has(last.status) || i === maxTries - 1) break;
-      if (opts.onWait) opts.onWait(i + 1, maxTries);
-      await sleep(2500);
-    }
+      if (!TRANSIENT.has(last.status)) break;
+      if (opts.onWait) opts.onWait(Math.round((Date.now() - start) / 1000));
+      await sleep(3000);
+    } while (Date.now() - start < RETRY_MS);
     throw new Error(errorFor(last.status, last.body));
   }
 
   async function getMeta(id, opts) {
     opts = opts || {};
     const base = apiBase();
-    const maxTries = opts.tries || 6;
-    for (let i = 0; i < maxTries; i++) {
+    const start = Date.now();
+    for (;;) {
       let res;
       try { res = await fetch(base + '/api/blob/' + encodeURIComponent(id) + '/meta', { cache: 'no-store', signal: opts.signal }); }
       catch (e) { if (e && e.name === 'AbortError') throw e; res = null; }
       if (res && res.status === 404) return null;
       if (res && res.ok) return res.json();
       if (res && !TRANSIENT.has(res.status)) throw new Error(errorFor(res.status));
-      if (i === maxTries - 1) throw new Error(errorFor(res ? res.status : 0));
-      if (opts.onWait) opts.onWait(i + 1, maxTries);
-      await sleep(2500);
+      if (Date.now() - start >= RETRY_MS) throw new Error(errorFor(res ? res.status : 0));
+      if (opts.onWait) opts.onWait(Math.round((Date.now() - start) / 1000));
+      await sleep(3000);
     }
-    return null;
   }
 
   /** Stream the blob back, calling onChunk(Uint8Array) and onProgress(loaded, total).
@@ -105,16 +111,16 @@
     opts = opts || {};
     const base = apiBase();
     const url = base + '/api/blob/' + encodeURIComponent(id);
-    const maxTries = 5;
+    const start = Date.now();
     let res = null;
-    for (let i = 0; i < maxTries; i++) {
+    for (;;) {
       try { res = await fetch(url, { cache: 'no-store', signal: opts.signal }); }
       catch (e) { if (e && e.name === 'AbortError') throw e; res = null; }
       if (res && res.ok) break;
       if (res && !TRANSIENT.has(res.status)) { let body = null; try { body = await res.json(); } catch (e) { /* ignore */ } throw new Error(errorFor(res.status, body)); }
-      if (i === maxTries - 1) throw new Error(errorFor(res ? res.status : 0));
-      if (opts.onWait) opts.onWait(i + 1, maxTries);
-      await sleep(2500);
+      if (Date.now() - start >= RETRY_MS) throw new Error(errorFor(res ? res.status : 0));
+      if (opts.onWait) opts.onWait(Math.round((Date.now() - start) / 1000));
+      await sleep(3000);
     }
     const total = +(res.headers.get('Content-Length') || 0) || 0;
     let loaded = 0;
