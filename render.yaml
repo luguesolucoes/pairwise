@@ -1,0 +1,17 @@
+# One-click deploy to Render (https://render.com). In the dashboard choose
+# "New +" -> "Blueprint", pick this repository, and Render reads this file.
+# The service builds the page and runs the Node server; Render provides PORT and HTTPS.
+services:
+  - type: web
+    name: pairwise
+    runtime: node
+    plan: free
+    buildCommand: npm install && node build.mjs
+    startCommand: node server/server.mjs
+    envVars:
+      - key: PAIRWISE_MAX_BYTES
+        value: "67108864"     # 64 MiB upload cap
+      - key: PAIRWISE_MAX_TTL
+        value: "86400"        # 24 h maximum link lifetime
+      - key: PAIRWISE_STORE
+        value: "/tmp/pairwise" # ephemeral on free tier; fine for short-lived transfers
