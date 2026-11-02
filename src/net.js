@@ -53,14 +53,18 @@
     return new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest();
       xhr.open('POST', url);
-      xhr.responseType = 'json';
       xhr.setRequestHeader('Content-Type', 'application/octet-stream');
       if (xhr.upload && onProgress) xhr.upload.onprogress = (e) => { if (e.lengthComputable) onProgress(e.loaded, e.total); };
       xhr.onload = () => {
-        const body = xhr.response || (() => { try { return JSON.parse(xhr.responseText); } catch (e) { return null; } })();
-        resolve({ status: xhr.status, body });
+        let body = null; try { body = JSON.parse(xhr.responseText); } catch (e) { /* not JSON */ }
+        // Who answered, for diagnosis: our server, Render's edge, or a proxy in between.
+        let via = '';
+        try { via = (xhr.getResponseHeader('server') || '') + (xhr.getResponseHeader('cf-ray') ? ' cf' : '') + (xhr.getResponseHeader('x-render-routing') ? ' render:' + xhr.getResponseHeader('x-render-routing') : ''); } catch (e) { /* ignore */ }
+        const snippet = body ? '' : (xhr.responseText || '').replace(/\s+/g, ' ').trim().slice(0, 100);
+        resolve({ status: xhr.status, body, via: via.trim(), snippet });
       };
-      xhr.onerror = () => resolve({ status: 0, body: null });
+      xhr.onerror = () => resolve({ status: 0, body: null, via: 'network error', snippet: '' });
+      xhr.ontimeout = () => resolve({ status: 0, body: null, via: 'timeout', snippet: '' });
       xhr.onabort = () => reject(new DOMException('Cancelled', 'AbortError'));
       if (signal) {
         if (signal.aborted) { xhr.abort(); return; }
@@ -69,6 +73,8 @@
       xhr.send(blob);
     });
   }
+
+  function attemptLabel(r) { return 'HTTP ' + r.status + (r.via ? ' (' + r.via + ')' : '') + (r.snippet ? ' — ' + r.snippet : ''); }
 
   /** Store a Blob of ciphertext. Resolves { id, expiresAt, size }. Retries cold-start rejections. */
   async function uploadBlob(blob, opts) {
@@ -80,12 +86,14 @@
     let last = { status: 0, body: null };
     do {
       last = await postOnce(url, blob, opts.onProgress, opts.signal);
+      if (opts.onAttempt) opts.onAttempt(attemptLabel(last));
       if (last.status === 201 && last.body && last.body.id) return last.body;
+      if (last.status === 201 && (!last.body || !last.body.id)) throw new Error('The server accepted the data but the reply was altered on the way back (' + attemptLabel(last) + '). A proxy may be rewriting responses.');
       if (!TRANSIENT.has(last.status)) break;
       if (opts.onWait) opts.onWait(Math.round((Date.now() - start) / 1000));
       await sleep(3000);
     } while (Date.now() - start < RETRY_MS);
-    throw new Error(errorFor(last.status, last.body));
+    throw new Error('Pairing kept failing: ' + attemptLabel(last) + '. ' + errorFor(last.status, last.body));
   }
 
   async function getMeta(id, opts) {
